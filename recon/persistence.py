@@ -170,6 +170,16 @@ class Database:
         return self._conn.execute(
             "SELECT * FROM project ORDER BY created_at DESC").fetchall()
 
+    def project_by_name(self, name: str) -> sqlite3.Row | None:
+        return self._conn.execute(
+            "SELECT * FROM project WHERE name=? ORDER BY id DESC LIMIT 1",
+            (name,)).fetchone()
+
+    def get_or_create_project(self, name: str, contractor: str | None = None,
+                             area: str | None = None) -> int:
+        row = self.project_by_name(name)
+        return row["id"] if row else self.create_project(name, contractor, area)
+
     # --- contract items ---
     def save_contract(self, project_id: int, items: list[ContractItem]) -> None:
         with self.tx() as cur:
@@ -218,6 +228,28 @@ class Database:
         return self._conn.execute(
             "SELECT * FROM billing_cycle WHERE project_id=? ORDER BY cycle_no",
             (project_id,)).fetchall()
+
+    def get_or_create_cycle(self, project_id: int, cycle_no: int, *,
+                           period_label: str | None, billing_mode: str,
+                           retainage_pct: float,
+                           prior_billed_to_date: float = 0.0) -> int:
+        """Return the cycle id for (project, cycle_no), updating its metadata if it
+        already exists so re-saving a cycle overwrites rather than duplicates."""
+        row = self._conn.execute(
+            "SELECT id FROM billing_cycle WHERE project_id=? AND cycle_no=?",
+            (project_id, cycle_no)).fetchone()
+        if row is None:
+            return self.create_cycle(
+                project_id, cycle_no, period_label=period_label,
+                billing_mode=billing_mode, retainage_pct=retainage_pct,
+                prior_billed_to_date=prior_billed_to_date)
+        with self.tx() as cur:
+            cur.execute(
+                """UPDATE billing_cycle SET period_label=?, billing_mode=?,
+                       retainage_pct=?, prior_billed_to_date=? WHERE id=?""",
+                (period_label, billing_mode, retainage_pct, prior_billed_to_date,
+                 row["id"]))
+        return row["id"]
 
     # --- alias crosswalk (global) ---
     def load_alias_store(self) -> AliasStore:
@@ -303,6 +335,52 @@ class Database:
                      json.dumps([{"rule": f.rule, "severity": f.severity.value,
                                   "message": f.message} for f in r.flags])),
                 )
+
+    def load_results(self, cycle_id: int) -> list[sqlite3.Row]:
+        return self._conn.execute(
+            "SELECT * FROM recon_result WHERE cycle_id=? ORDER BY code",
+            (cycle_id,)).fetchall()
+
+    def cycle_summary(self, cycle_id: int) -> dict:
+        """Headline numbers for a saved cycle, recomputed from its stored results."""
+        bc = self._conn.execute(
+            "SELECT * FROM billing_cycle WHERE id=?", (cycle_id,)).fetchone()
+        rows = self.load_results(cycle_id)
+        billed = sum((r["billed_amount"] or 0) for r in rows)
+        expected = sum((r["expected_amount"] or 0) for r in rows)
+        flagged = sum((r["variance"] or 0) for r in rows
+                      if r["severity"] == "critical" and (r["variance"] or 0) > 0)
+        n_crit = sum(1 for r in rows if r["severity"] == "critical")
+        pct = bc["retainage_pct"] or 0
+        retainage = billed * pct / 100.0
+        return {
+            "cycle_id": cycle_id, "cycle_no": bc["cycle_no"],
+            "period_label": bc["period_label"], "billing_mode": bc["billing_mode"],
+            "billed": billed, "expected": expected, "flagged": flagged,
+            "n_critical": n_crit, "retainage": retainage,
+            "net": billed - flagged - retainage, "n_units": len(rows),
+            "created_at": bc["created_at"],
+        }
+
+    def cycle_summaries(self, project_id: int) -> list[dict]:
+        return [self.cycle_summary(c["id"]) for c in self.list_cycles(project_id)]
+
+    def save_cycle_snapshot(self, *, project_name: str, contractor: str | None,
+                           area: str | None, cycle_no: int, period_label: str | None,
+                           billing_mode: str, retainage_pct: float,
+                           prior_billed: float, contract_items: list[ContractItem],
+                           rows: list[ReconRow], actor: str | None = None) -> tuple[int, int]:
+        """Persist a finalized cycle: project + contract + cycle metadata + results.
+        Idempotent per (project, cycle_no) — re-saving overwrites."""
+        pid = self.get_or_create_project(project_name, contractor, area)
+        self.save_contract(pid, contract_items)
+        cid = self.get_or_create_cycle(
+            pid, cycle_no, period_label=period_label, billing_mode=billing_mode,
+            retainage_pct=retainage_pct, prior_billed_to_date=prior_billed)
+        self.save_results(cid, rows)
+        self.log(actor, "save_cycle", "billing_cycle", cid,
+                 {"project": project_name, "cycle_no": cycle_no, "n_units": len(rows)})
+        return pid, cid
 
     def trend(self, project_id: int) -> list[dict]:
         """Built-to-date vs billed-to-date per cycle for the trend view."""

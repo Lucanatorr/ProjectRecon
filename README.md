@@ -38,7 +38,22 @@ Implemented end-to-end and validated against the mockup's hand-reconciled cycle
   contractor's PDF invoices, with a column-mapping panel to set one up when columns
   don't auto-detect
 
-Later phases (OCR for scanned PDFs, multi-cycle trend, PDF approval packet) are
+**Phase 3 (progress billing) — in progress, by sprint:**
+- ✅ 3.1 Change orders — a CO schedule extends/revises the contract (`is_change_order`);
+  CO-authorized units clear the unauthorized/over-price flags and show a CO marker on
+  the reconciliation row
+- ✅ 3.2 Retainage — first-class gross → retainage → net; a `check_retainage`
+  validates the retainage actually withheld on the invoice against the contract
+  rate (over/under-withheld warning), surfaced on the reconcile dashboard and the
+  export summary
+- ✅ 3.3 Multi-cycle persistence — the Export step saves a finalized cycle (project +
+  contract + cycle metadata + per-unit results) to SQLite, idempotent per
+  (project, cycle_no); a "Saved cycles" table loads prior cycles back, surviving
+  session reloads
+- ⬜ 3.4 Current-vs-prior validation (cumulative pay-app check)
+- ⬜ 3.5 Built-to-date vs billed-to-date trend
+
+Later phases (OCR for scanned PDFs, PDF approval packet, reviewer sign-off) are
 scaffolded in the design but not yet built.
 
 ## Architecture

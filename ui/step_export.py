@@ -71,6 +71,8 @@ def render(state: WizardState) -> None:
     sid = get_sid()
 
     st.markdown(lede(_LEDE), unsafe_allow_html=True)
+    from ui.progress import show_flash
+    show_flash(state)
 
     tab = st.query_params.get("etab", "sum")
     if tab not in {k for k, _ in _TABS}:
@@ -81,13 +83,20 @@ def render(state: WizardState) -> None:
         f'href="?step=export&sid={sid}&etab={k}" target="_self">{label}</a>'
         for k, label in _TABS) + "</div>"
 
+    from recon.reconcile import check_retainage
+    chk = check_retainage(totals.total_billed, state.retainage_pct,
+                          state.actual_retainage)
+
     if tab == "sum":
-        preview = _summary_table(totals)
+        preview = _summary_table(totals, chk)
     else:
         preview = _preview_table(_rows_for(tab, rows))
 
     st.markdown(f'<div class="card card--flush">{tabbar}'
                 f'<div class="prev">{preview}</div></div>', unsafe_allow_html=True)
+
+    if chk.has_actual and not chk.ok:
+        st.warning(chk.message)
 
     # recommendation + downloads
     st.markdown(
@@ -111,14 +120,70 @@ def render(state: WizardState) -> None:
             file_name="reconciliation_summary.txt", mime="text/plain",
             use_container_width=True)
 
+    _cycle_history(state, rows, totals)
 
-def _summary_table(totals) -> str:
+
+def _cycle_history(state: WizardState, rows, totals) -> None:
+    from ui.db import cycle_history, save_cycle
+    from ui.progress import loading_bar
+
+    st.markdown('<div class="card__t" style="margin-top:18px">Cycle history</div>'
+                '<div class="card__note" style="margin-bottom:8px">Save this cycle to '
+                'the project so it can be trended and compared against next month.</div>',
+                unsafe_allow_html=True)
+
+    proj = state.project_name or "New project"
+    if st.button(f"Save cycle {int(state.cycle_no)} to “{proj}”", type="primary",
+                 key="save_cycle"):
+        with loading_bar("Saving cycle…") as step:
+            step(50, "Persisting results…")
+            save_cycle(
+                project_name=proj, contractor=state.contractor or None,
+                area=state.area or None, cycle_no=int(state.cycle_no),
+                period_label=state.period_label or None,
+                billing_mode=state.billing_mode, retainage_pct=state.retainage_pct,
+                prior_billed=state.prior_billed, contract_items=state.contract,
+                rows=rows)
+            step(100, "Done")
+        state.flash = f"Saved cycle {int(state.cycle_no)} to “{proj}”."
+        st.rerun()
+
+    history = cycle_history(proj)
+    if not history:
+        st.caption("No saved cycles yet for this project.")
+        return
+
+    headers = [("Cycle", ""), ("Period", ""), ("Mode", ""), ("Billed", "r"),
+               ("Expected", "r"), ("Flagged", "r"), ("Net", "r"), ("Saved", "")]
+    body = []
+    for s in history:
+        body.append([
+            td(f'{s["cycle_no"]:02d}', "code"),
+            td(s["period_label"] or "—"),
+            td(s["billing_mode"]),
+            td(f'${s["billed"]:,.0f}', "r num"),
+            td(f'${s["expected"]:,.0f}', "r num"),
+            td(f'${s["flagged"]:,.0f}', "r num"),
+            td(f'${s["net"]:,.0f}', "r num"),
+            td((s["created_at"] or "")[:16]),
+        ])
+    st.markdown(card_open(f"Saved cycles · {proj}") + table_html(headers, body)
+                + "</div>", unsafe_allow_html=True)
+
+
+def _summary_table(totals, chk=None) -> str:
     headers = [("Metric", ""), ("Value", "r")]
     metrics = [
         ("Billed this cycle (gross)", f"${totals.total_billed:,.2f}"),
         ("Expected (built × contract)", f"${totals.total_expected:,.2f}"),
         ("Flagged over-billing", f"${totals.flagged_over_billing:,.2f}"),
-        ("Retainage held", f"${totals.retainage_held:,.2f}"),
+        (f"Retainage — contract ({chk.contract_pct:g}%)" if chk else "Retainage held",
+         f"${totals.retainage_held:,.2f}"),
+    ]
+    if chk is not None and chk.has_actual:
+        metrics.append(("Retainage — withheld on invoice", f"${chk.actual:,.2f}"))
+        metrics.append(("Retainage — variance", f"${chk.variance:,.2f}"))
+    metrics += [
         ("Net recommended", f"${totals.net_recommended:,.2f}"),
         ("Critical flags", str(totals.n_critical)),
         ("Warnings", str(totals.n_warning)),

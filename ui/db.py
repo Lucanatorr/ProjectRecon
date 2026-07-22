@@ -39,3 +39,23 @@ def delete_profile(contractor: str) -> None:
         db.delete_template_profile(contractor)
     finally:
         db.close()
+
+
+def save_cycle(**kwargs) -> tuple[int, int]:
+    db = Database()
+    try:
+        return db.save_cycle_snapshot(**kwargs)
+    finally:
+        db.close()
+
+
+def cycle_history(project_name: str) -> list[dict]:
+    """Saved-cycle summaries for a project (empty if it has none yet)."""
+    if not project_name:
+        return []
+    db = Database()
+    try:
+        proj = db.project_by_name(project_name)
+        return db.cycle_summaries(proj["id"]) if proj else []
+    finally:
+        db.close()

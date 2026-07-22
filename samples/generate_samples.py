@@ -109,9 +109,18 @@ def write_invoice_pdf(path: Path, inv_df) -> None:
                Spacer(1, 12), table])
 
 
+def change_order() -> pd.DataFrame:
+    # Authorizes the higher directional-bore rate ($9.50 → $10.25) that was
+    # otherwise flagged as an over-contract price. Same code = price revision.
+    return pd.DataFrame([
+        ("4.1", 'Directional bore 2"', "FT", 10.25, 6000),
+    ], columns=["Code", "Description", "UoM", "Unit Price", "Est Qty"])
+
+
 def main() -> None:
     HERE.mkdir(parents=True, exist_ok=True)
     bid_schedule().to_excel(HERE / "Fiber_Build_2025_BidSchedule.xlsx", index=False)
+    change_order().to_excel(HERE / "ChangeOrder_01.xlsx", index=False)
     tally_sheet().to_excel(HERE / "AsBuilt_PhaseB_Tally.xlsx", index=False)
     inv = invoice()
     inv["Amount"] = inv["Qty"] * inv["Unit Price"]
