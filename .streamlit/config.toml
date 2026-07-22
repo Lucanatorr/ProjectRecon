@@ -1,0 +1,15 @@
+# Streamlit theme aligned to reconciliation_mockup.html so native widgets
+# (segmented control, focus rings, sliders, primary accents) use the mockup's
+# blue rather than Streamlit's default red.
+[theme]
+primaryColor = "#1c5ac4"
+backgroundColor = "#eef1f6"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#16202e"
+font = "sans serif"
+
+[client]
+toolbarMode = "minimal"
+
+[server]
+runOnSave = true

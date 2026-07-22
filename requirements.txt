@@ -1,0 +1,19 @@
+# Splice — Contractor Invoice ↔ As-Built Reconciliation Tool
+# Core (Phase 1 MVP)
+streamlit>=1.36
+pandas>=2.2
+numpy>=1.26
+openpyxl>=3.1
+rapidfuzz>=3.9
+pdfplumber>=0.11
+reportlab>=4.0        # PDF fixtures now; PDF approval summary in Phase 4
+pydantic>=2.7
+
+# Dev / test
+pytest>=8.2
+
+# Optional (Phase 2/4) — uncomment when needed
+# pdf2image
+# pytesseract
+# ocrmypdf
+# camelot-py
