@@ -24,7 +24,7 @@ class UoM(str, Enum):
         key = str(raw).strip().upper().replace(" ", "")
         aliases = {
             "EA": cls.EA, "EACH": cls.EA, "E": cls.EA,
-            "FT": cls.FT, "F": cls.FT, "LF": cls.FT, "FOOT": cls.FT, "FEET": cls.FT,
+            "FT": cls.FT, "F": cls.FT, "LF": cls.FT, "FOOT": cls.FT, "FEET": cls.FT, "Per Foot": cls.FT,
             "100FT": cls.C_FT, "C_FT": cls.C_FT, "CFT": cls.C_FT, "MFT": cls.C_FT,
             "LS": cls.LS, "LUMPSUM": cls.LS, "LUMP": cls.LS,
         }
