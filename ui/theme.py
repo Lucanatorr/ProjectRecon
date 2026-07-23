@@ -206,6 +206,7 @@ html, body, [data-testid="stApp"], [data-testid="stAppViewContainer"], [data-tes
 .chip--warning{background:var(--warn-soft);color:var(--warn);} .chip--warning::before{background:var(--warn);}
 .chip--ok{background:var(--ok-soft);color:var(--ok);} .chip--ok::before{background:var(--ok);}
 .chip--info{background:var(--blue-soft);color:var(--blue);} .chip--info::before{background:var(--blue);}
+.co-tag{font-size:9.5px;font-weight:600;letter-spacing:.4px;text-transform:uppercase;background:var(--blue-soft);color:var(--blue);padding:2px 6px;border-radius:5px;margin-left:8px;vertical-align:middle;}
 
 .rrow__detail{border-top:1px dashed var(--line);padding:14px 18px;background:#fafbfd;font-size:12.5px;color:var(--muted);}
 .rrow__detail b{color:var(--text);font-weight:600;}
@@ -350,8 +351,8 @@ def sidebar_html(steps_state: list[dict], project_name: str, meta: str,
       <div class="side__logo">
         <div class="side__mark"><span></span></div>
         <div>
-          <div class="side__name">Splice</div>
-          <div class="side__sub">Invoice Reconciliation</div>
+          <div class="side__name">Project Recon</div>
+          <div class="side__sub">Reconciliation Tool</div>
         </div>
       </div>
       <div class="side__ribbon" title="Fiber color code">{ribbon}</div>
@@ -473,12 +474,13 @@ def recon_row_html(row: ReconRow, open_: bool = False) -> str:
     code = _esc(row.code) if row.code else "—"
     built_disp = _qty(row.built_qty) if row.built_qty else "—"
     uom_line = f"{row.uom.value}"
+    co_tag = '<span class="co-tag">Change order</span>' if row.is_change_order else ""
 
     return f"""<details class="rrow flag-{sev}"{' open' if open_ else ''}>
       <summary>
         <div class="rid">
           <span class="rid__code">{code}</span>
-          <div><div class="rid__desc">{_esc(row.description)}</div>
+          <div><div class="rid__desc">{_esc(row.description)}{co_tag}</div>
           <div class="rid__uom">{_esc(uom_line)}</div></div>
         </div>
         <div class="bars">
@@ -553,30 +555,33 @@ def xw_card_html(raw: str, suggestion_html: str, confirm_href: str,
                  change_href: str, confirm_label: str = "Confirm",
                  low: bool = False) -> str:
     """One crosswalk review card. Actions are query-param links (state persists
-    across the reload, so this stays purely declarative HTML)."""
-    change = ("" if low else
-              f'<a class="btn btn--sm" href="{change_href}" target="_self">Change</a>')
-    return f"""<div class="xw">
-      <div>
-        <div class="xw__from">Source text</div>
-        <div class="xw__raw">{_esc(raw)}</div>
-        <div class="xw__sug">{suggestion_html}</div>
-      </div>
-      <div class="xw__act">
-        <a class="btn btn--pri btn--sm" href="{confirm_href}" target="_self">{_esc(confirm_label)}</a>
-        {change}
-      </div>
-    </div>"""
+    across the reload, so this stays purely declarative HTML).
+
+    Emitted as a single blank-line-free string: a whitespace-only line (e.g. from
+    an omitted "Change" link) would read as a Markdown blank line and terminate the
+    HTML block, spilling every following card out as raw text.
+    """
+    actions = (f'<a class="btn btn--pri btn--sm" href="{confirm_href}" '
+               f'target="_self">{_esc(confirm_label)}</a>')
+    if not low:
+        actions += (f'<a class="btn btn--sm" href="{change_href}" '
+                    f'target="_self">Change</a>')
+    return (
+        '<div class="xw"><div>'
+        '<div class="xw__from">Source text</div>'
+        f'<div class="xw__raw">{_esc(raw)}</div>'
+        f'<div class="xw__sug">{suggestion_html}</div>'
+        f'</div><div class="xw__act">{actions}</div></div>'
+    )
 
 
 def xw_resolved_html(raw: str, target_html: str, change_href: str) -> str:
-    return f"""<div class="xw is-resolved">
-      <div>
-        <div class="xw__raw">{_esc(raw)}</div>
-        <div class="xw__done">✓ {target_html}</div>
-      </div>
-      <div class="xw__act">
-        <a class="btn btn--sm" href="{change_href}" target="_self">Change</a>
-      </div>
-    </div>"""
+    return (
+        '<div class="xw is-resolved"><div>'
+        f'<div class="xw__raw">{_esc(raw)}</div>'
+        f'<div class="xw__done">✓ {target_html}</div>'
+        f'</div><div class="xw__act">'
+        f'<a class="btn btn--sm" href="{change_href}" target="_self">Change</a>'
+        '</div></div>'
+    )
 

@@ -57,6 +57,14 @@ def render(state: WizardState) -> None:
     ]
     st.markdown(kpi_row_html(tiles), unsafe_allow_html=True)
 
+    # retainage verification (only when the coordinator supplied the withheld figure)
+    from recon.reconcile import check_retainage
+    chk = check_retainage(totals.total_billed, state.retainage_pct,
+                          state.actual_retainage)
+    if chk.has_actual:
+        (st.success if chk.ok else st.warning)(
+            ("✓ " if chk.ok else "") + chk.message)
+
     # filter chips (?flt=)
     counts = {
         "all": len(rows),

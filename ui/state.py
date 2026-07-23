@@ -42,8 +42,9 @@ class WizardState:
     invoice_profile_note: str = ""      # e.g. "Applied saved template for <contractor>"
 
     billing_mode: str = "cumulative"       # or "discrete"
-    retainage_pct: float = 10.0
+    retainage_pct: float = 10.0            # contract-required retainage
     prior_billed: float = 0.0
+    actual_retainage: float | None = None  # withheld on the invoice (for verification)
 
     # crosswalk: raw_desc -> code (confirmed this session), plus not-in-contract set
     resolved: dict[str, str] = field(default_factory=dict)
@@ -53,6 +54,7 @@ class WizardState:
     results: list[ReconRow] = field(default_factory=list)
     results_fp: str = ""                  # fingerprint of inputs behind `results`
     current: str = "contract"
+    flash: str = ""                       # one-shot success message after an ingest
 
     # step completion flags
     done: set[str] = field(default_factory=set)
@@ -207,7 +209,8 @@ def inputs_fingerprint(state: WizardState) -> str:
 
     parts = [
         state.billing_mode, f"{state.retainage_pct}",
-        *(f"{c.code}|{c.unit_price}|{c.est_qty}|{c.uom.value}" for c in state.contract),
+        *(f"{c.code}|{c.unit_price}|{c.est_qty}|{c.uom.value}|{int(c.is_change_order)}"
+          for c in state.contract),
         *(f"{a.raw_desc}|{a.qty}|{a.uom.value if a.uom else ''}" for a in state.asbuilt),
         *(f"{i.invoice_id}|{i.raw_desc}|{i.qty}|{i.unit_price}" for i in state.invoices),
         *(f"{k}->{v}" for k, v in sorted(state.resolved.items())),

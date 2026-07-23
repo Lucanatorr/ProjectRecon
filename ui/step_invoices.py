@@ -15,6 +15,7 @@ from recon.ingest.invoice_pdf import extract_tables, suggest_mapping
 from recon.ingest.invoices import parse_invoices
 from recon.models import TemplateProfile
 from ui.db import load_profile, save_profile
+from ui.progress import is_new_upload, loading_bar, show_flash, upload_signature
 from ui.state import WizardState
 from ui.theme import badge, card_close, card_open, file_row, lede, table_html, td
 from ui.uploads import save_bytes, save_upload
@@ -53,6 +54,7 @@ def _ingest(state: WizardState, paths, *, pdf_bytes=None, pdf_name="") -> None:
 
 def render(state: WizardState) -> None:
     st.markdown(lede(_LEDE), unsafe_allow_html=True)
+    show_flash(state)
 
     c1, c2, c3 = st.columns([3, 1, 1])
     with c1:
@@ -64,23 +66,38 @@ def render(state: WizardState) -> None:
         st.write("")
         if st.button("Load xlsx", use_container_width=True, key="inv_sample") \
                 and SAMPLE.exists():
-            _ingest(state, [SAMPLE])
+            with loading_bar("Loading sample invoice…") as step:
+                step(45, "Parsing invoice…")
+                _ingest(state, [SAMPLE])
+                step(100, "Done")
+            state.flash = f"Loaded {len(state.invoices)} line items."
             st.rerun()
     with c3:
         st.write("")
         st.write("")
         if st.button("Load PDF", use_container_width=True, key="inv_pdf_sample") \
                 and PDF_SAMPLE.exists():
-            _ingest(state, [PDF_SAMPLE], pdf_bytes=PDF_SAMPLE.read_bytes(),
-                    pdf_name=PDF_SAMPLE.name)
+            with loading_bar("Loading sample PDF invoice…") as step:
+                step(45, "Extracting table…")
+                _ingest(state, [PDF_SAMPLE], pdf_bytes=PDF_SAMPLE.read_bytes(),
+                        pdf_name=PDF_SAMPLE.name)
+                step(100, "Done")
+            state.flash = f"Extracted {len(state.invoices)} line items from the PDF."
             st.rerun()
-    if ups:
+    if ups and is_new_upload("inv_up_sig", upload_signature(ups)):
         try:
-            paths = [save_upload(u) for u in ups]
-            pdf_up = next((u for u in ups if Path(u.name).suffix.lower() == ".pdf"), None)
-            _ingest(state, paths,
-                    pdf_bytes=pdf_up.getvalue() if pdf_up else None,
-                    pdf_name=pdf_up.name if pdf_up else "")
+            with loading_bar("Loading invoices…") as step:
+                step(20, "Reading files…")
+                paths = [save_upload(u) for u in ups]
+                pdf_up = next((u for u in ups
+                               if Path(u.name).suffix.lower() == ".pdf"), None)
+                step(55, "Parsing invoices…")
+                _ingest(state, paths,
+                        pdf_bytes=pdf_up.getvalue() if pdf_up else None,
+                        pdf_name=pdf_up.name if pdf_up else "")
+                step(100, "Done")
+            state.flash = (f"Loaded {len(state.invoices)} line items from "
+                           f"{len(state.invoice_files)} file(s).")
             st.rerun()
         except ValueError as e:
             st.error(f"Could not parse invoice: {e}")
@@ -136,12 +153,25 @@ def _billing_settings(state: WizardState) -> None:
                 state.billing_mode = mode
         with m2:
             state.retainage_pct = st.number_input(
-                "Retainage held (%)", min_value=0.0, max_value=100.0,
+                "Contract retainage (%)", min_value=0.0, max_value=100.0,
                 value=state.retainage_pct, step=0.5)
         with m3:
             state.prior_billed = st.number_input(
                 "Prior billed to date ($)", min_value=0.0, value=state.prior_billed,
                 step=1000.0)
+
+        verify = st.checkbox("Verify retainage withheld on the invoice",
+                            value=state.actual_retainage is not None,
+                            key="verify_retainage")
+        if verify:
+            state.actual_retainage = st.number_input(
+                "Retainage withheld on invoice ($)", min_value=0.0,
+                value=float(state.actual_retainage or 0.0), step=100.0,
+                help="Enter the retainage the contractor actually withheld this cycle "
+                     "so it can be checked against the contract rate.")
+        else:
+            state.actual_retainage = None
+
         st.markdown('<div class="hint">Cumulative mode validates this period = to-date '
                     '− prior, and checks retainage against the contract.</div>',
                     unsafe_allow_html=True)

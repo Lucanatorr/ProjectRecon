@@ -12,6 +12,7 @@ from config import ROOT
 from recon.ingest.asbuilt_pdf import extract_asbuilt_pdf
 from recon.ingest.tally import parse_tally
 from recon.models import AsBuiltLine, UoM
+from ui.progress import is_new_upload, loading_bar, show_flash, upload_signature
 from ui.state import WizardState
 from ui.theme import badge, card_close, card_open, lede, table_html, td
 from ui.uploads import save_upload
@@ -37,6 +38,7 @@ def _conf_badge(confidence: str) -> str:
 
 def render(state: WizardState) -> None:
     st.markdown(lede(_LEDE), unsafe_allow_html=True)
+    show_flash(state)
     _uploader(state)
 
     if not state.asbuilt:
@@ -98,34 +100,45 @@ def _uploader(state: WizardState) -> None:
         st.write("")
         if st.button("Load tally", use_container_width=True, key="ab_sample") \
                 and SAMPLE.exists():
-            state.asbuilt = parse_tally(SAMPLE)
+            with loading_bar("Loading sample tally…") as step:
+                step(40, "Summing by unit…")
+                state.asbuilt = parse_tally(SAMPLE)
+                step(100, "Done")
             state.asbuilt_source = SAMPLE.name
             state.asbuilt_warnings = []
+            state.flash = f"Loaded {len(state.asbuilt)} built units."
             st.rerun()
     with c3:
         st.write("")
         st.write("")
         if st.button("Load PDF", use_container_width=True, key="ab_pdf_sample") \
                 and PDF_SAMPLE.exists():
-            lines, report = extract_asbuilt_pdf(PDF_SAMPLE)
+            with loading_bar("Loading sample PDF…") as step:
+                step(45, "Extracting table…")
+                lines, report = extract_asbuilt_pdf(PDF_SAMPLE)
+                step(100, "Done")
             state.asbuilt = lines
             state.asbuilt_source = PDF_SAMPLE.name
             state.asbuilt_warnings = list(report.warnings)
+            state.flash = f"Extracted {len(lines)} built units from the PDF."
             st.rerun()
-    if up is not None:
-        path = save_upload(up)
+    if up is not None and is_new_upload("asbuilt_up_sig", upload_signature(up)):
         try:
-            if path.suffix.lower() == ".pdf":
-                lines, report = extract_asbuilt_pdf(path)
-                state.asbuilt = lines
-                state.asbuilt_warnings = list(report.warnings)
-                if not lines:
-                    st.warning("No as-built table could be read from that PDF — "
-                               "enter quantities manually below or upload a tally sheet.")
-            else:
-                state.asbuilt = parse_tally(path)
-                state.asbuilt_warnings = []
+            with loading_bar("Loading as-built…") as step:
+                step(20, "Reading file…")
+                path = save_upload(up)
+                is_pdf = path.suffix.lower() == ".pdf"
+                step(55, "Extracting table…" if is_pdf else "Summing by unit…")
+                if is_pdf:
+                    lines, report = extract_asbuilt_pdf(path)
+                    state.asbuilt = lines
+                    state.asbuilt_warnings = list(report.warnings)
+                else:
+                    state.asbuilt = parse_tally(path)
+                    state.asbuilt_warnings = []
+                step(100, "Done")
             state.asbuilt_source = up.name
+            state.flash = f"Loaded {len(state.asbuilt)} built units."
             st.rerun()
         except ValueError as e:
             st.error(f"Could not parse as-built: {e}")

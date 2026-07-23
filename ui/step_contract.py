@@ -10,11 +10,13 @@ import streamlit as st
 from config import ROOT
 from recon.contract import apply_change_orders, load_bid_schedule
 from recon.models import ContractItem, UoM
+from ui.progress import is_new_upload, loading_bar, show_flash, upload_signature
 from ui.state import WizardState
 from ui.theme import card_close, card_open, lede, table_html, td
 from ui.uploads import save_upload
 
 SAMPLE = ROOT / "samples" / "Fiber_Build_2025_BidSchedule.xlsx"
+CO_SAMPLE = ROOT / "samples" / "ChangeOrder_01.xlsx"
 
 _LEDE = ("The bid schedule is the anchor. Every quantity and price on an invoice "
          "reconciles against these authoritative unit rates. Load it once per job; "
@@ -23,6 +25,7 @@ _LEDE = ("The bid schedule is the anchor. Every quantity and price on an invoice
 
 def render(state: WizardState) -> None:
     st.markdown(lede(_LEDE), unsafe_allow_html=True)
+    show_flash(state)
 
     if not state.contract:
         _uploader(state)
@@ -54,17 +57,36 @@ def render(state: WizardState) -> None:
             state.done.add("contract")
             st.success("Confirmed.")
 
-    with st.expander("Replace schedule · add change order · edit values"):
+    n_co = sum(1 for ci in state.contract if ci.is_change_order)
+    with st.expander(f"Replace schedule · change orders ({n_co}) · edit values"):
         _uploader(state, compact=True)
-        co = st.file_uploader("Change order (xlsx / csv)", type=["xlsx", "csv"],
-                             key="co_up")
-        if co is not None:
+        cc1, cc2 = st.columns([3, 1])
+        with cc1:
+            co = st.file_uploader("Change order (xlsx / csv)", type=["xlsx", "csv"],
+                                 key="co_up")
+        with cc2:
+            st.write("")
+            st.write("")
+            if st.button("Load sample CO", use_container_width=True, key="co_sample") \
+                    and CO_SAMPLE.exists():
+                _apply_co(state, CO_SAMPLE)
+                st.rerun()
+        if co is not None and is_new_upload("co_up_sig", upload_signature(co)):
             try:
-                state.contract = apply_change_orders(state.contract, save_upload(co))
-                st.success("Change order applied.")
+                _apply_co(state, save_upload(co))
+                st.rerun()
             except ValueError as e:
                 st.error(f"Could not parse change order: {e}")
         _editor(state)
+
+
+def _apply_co(state: WizardState, path) -> None:
+    with loading_bar("Applying change order…") as step:
+        step(50, "Extending contract…")
+        state.contract = apply_change_orders(state.contract, path)
+        step(100, "Done")
+    n_co = sum(1 for ci in state.contract if ci.is_change_order)
+    state.flash = f"Change order applied — {n_co} change-order item(s) in the contract."
 
 
 def _uploader(state: WizardState, compact: bool = False) -> None:
@@ -77,15 +99,25 @@ def _uploader(state: WizardState, compact: bool = False) -> None:
         st.write("")
         if st.button("Load sample", use_container_width=True, key="c_sample") \
                 and SAMPLE.exists():
-            state.contract = load_bid_schedule(SAMPLE)
+            with loading_bar("Loading sample schedule…") as step:
+                step(40, "Parsing bid schedule…")
+                state.contract = load_bid_schedule(SAMPLE)
+                step(100, "Done")
             state.contract_source = SAMPLE.name
             state.done.add("contract")
+            state.flash = f"Loaded {len(state.contract)} contract units."
             st.rerun()
-    if up is not None:
+    if up is not None and is_new_upload("contract_up_sig", upload_signature(up)):
         try:
-            state.contract = load_bid_schedule(save_upload(up))
+            with loading_bar("Loading bid schedule…") as step:
+                step(20, "Reading file…")
+                path = save_upload(up)
+                step(60, "Parsing bid schedule…")
+                state.contract = load_bid_schedule(path)
+                step(100, "Done")
             state.contract_source = up.name
             state.done.add("contract")
+            state.flash = f"Loaded {len(state.contract)} contract units."
             st.rerun()
         except ValueError as e:
             st.error(f"Could not parse bid schedule: {e}")

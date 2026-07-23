@@ -142,6 +142,7 @@ def reconcile(
             contract_price=ci.unit_price if ci else None,
             billed_price=a.billed_price,
             est_qty=ci.est_qty if ci else None,
+            is_change_order=bool(ci.is_change_order) if ci else False,
             asbuilt_refs=a.asbuilt_refs,
             invoice_refs=a.invoice_refs,
         )
@@ -246,3 +247,43 @@ def cycle_totals(rows: list[ReconRow], retainage_pct: float = 0.0) -> CycleTotal
         retainage_held=retainage,
         net_recommended=net,
     )
+
+
+@dataclass
+class RetainageCheck:
+    """Validation of the retainage a contractor actually withheld against the
+    contract-required amount (SDD §7.3 retainage-mismatch warning)."""
+    contract_pct: float
+    expected: float             # gross × contract_pct — what should be withheld
+    actual: float | None        # what the invoice withheld (None if not provided)
+    ok: bool
+    variance: float             # actual − expected (0 when actual is None)
+    message: str
+
+    @property
+    def has_actual(self) -> bool:
+        return self.actual is not None
+
+
+def check_retainage(gross: float, contract_pct: float, actual: float | None = None,
+                    tol_abs: float = 1.0) -> RetainageCheck:
+    """Compare the retainage withheld on the invoice against the contract rate.
+
+    With no ``actual`` figure this just reports the expected withholding; given one,
+    it flags an over- or under-withholding beyond ``tol_abs`` dollars.
+    """
+    expected = gross * (contract_pct / 100.0)
+    if actual is None:
+        return RetainageCheck(
+            contract_pct, expected, None, True, 0.0,
+            f"Contract retainage {contract_pct:g}% → ${expected:,.2f} withheld this cycle.")
+    variance = actual - expected
+    ok = abs(variance) <= tol_abs
+    if ok:
+        msg = (f"Retainage matches contract ({contract_pct:g}%): "
+               f"${actual:,.2f} withheld.")
+    else:
+        verb = "over-withheld" if variance > 0 else "under-withheld"
+        msg = (f"Retainage {verb} by ${abs(variance):,.2f} — invoice withheld "
+               f"${actual:,.2f}, contract {contract_pct:g}% = ${expected:,.2f}.")
+    return RetainageCheck(contract_pct, expected, actual, ok, variance, msg)

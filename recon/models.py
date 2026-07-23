@@ -120,6 +120,7 @@ class ReconRow:
     billed_price: float
     est_qty: float | None
     flags: list[Flag] = field(default_factory=list)
+    is_change_order: bool = False       # authorized via a change order
     # Contributing source-line references for drill-down / traceability.
     asbuilt_refs: list[str] = field(default_factory=list)
     invoice_refs: list[str] = field(default_factory=list)
