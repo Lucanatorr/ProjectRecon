@@ -19,6 +19,7 @@ from ui.uploads import save_upload
 
 SAMPLE = ROOT / "samples" / "AsBuilt_PhaseB_Tally.xlsx"
 PDF_SAMPLE = ROOT / "samples" / "AsBuilt_PhaseB.pdf"
+SCAN_SAMPLE = ROOT / "samples" / "AsBuilt_PhaseB_scanned.pdf"
 
 _LEDE = ("Upload the tally sheet or as-built PDF. Structured tally sheets are summed "
          "by unit automatically; PDF extractions land in an editable grid so you "
@@ -33,6 +34,8 @@ def _conf_badge(confidence: str) -> str:
         return badge("Tally sum", "ok")
     if confidence == "confirmed":
         return badge("Confirmed", "ok")
+    if confidence == "ocr":
+        return badge("OCR · verify", "low")
     return badge("PDF · verify", "low")
 
 
@@ -41,12 +44,14 @@ def render(state: WizardState) -> None:
     show_flash(state)
     _uploader(state)
 
+    # warnings first: when an extraction yields nothing (e.g. a scan with no OCR
+    # installed) the explanation is the only thing worth showing.
+    for w in state.asbuilt_warnings:
+        st.warning(w)
+
     if not state.asbuilt:
         st.info("Upload a tally sheet or PDF, or click **Load sample**.")
         return
-
-    for w in state.asbuilt_warnings:
-        st.warning(w)
 
     if any(a.confidence in _UNCONFIRMED for a in state.asbuilt):
         _render_review_grid(state)          # PDF/OCR — confirm before it counts
@@ -91,7 +96,7 @@ def _render_review_grid(state: WizardState) -> None:
 
 
 def _uploader(state: WizardState) -> None:
-    c1, c2, c3 = st.columns([3, 1, 1])
+    c1, c2, c3, c4 = st.columns([3, 1, 1, 1])
     with c1:
         up = st.file_uploader("Tally sheet or as-built PDF (xlsx / csv / pdf)",
                              type=["xlsx", "csv", "pdf"], key="asbuilt_up")
@@ -123,6 +128,24 @@ def _uploader(state: WizardState) -> None:
             state.asbuilt_warnings = list(report.warnings)
             _log_asbuilt_load(state, PDF_SAMPLE.name)
             state.flash = f"Extracted {len(lines)} built units from the PDF."
+            st.rerun()
+    with c4:
+        st.write("")
+        st.write("")
+        if st.button("Load scan", use_container_width=True, key="ab_scan_sample",
+                     help="A scanned (image-only) as-built — needs OCR to read.") \
+                and SCAN_SAMPLE.exists():
+            with loading_bar("Reading scanned PDF…") as step:
+                step(45, "Running OCR…")
+                lines, report = extract_asbuilt_pdf(SCAN_SAMPLE)
+                step(100, "Done")
+            state.asbuilt = lines
+            state.asbuilt_source = SCAN_SAMPLE.name
+            state.asbuilt_warnings = list(report.warnings)
+            _log_asbuilt_load(state, SCAN_SAMPLE.name)
+            state.flash = (f"Read {len(lines)} built units by OCR."
+                           if report.ocr_pages else
+                           "Scanned PDF could not be read — see the warning below.")
             st.rerun()
     if up is not None and is_new_upload("asbuilt_up_sig", upload_signature(up)):
         try:

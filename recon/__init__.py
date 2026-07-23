@@ -2,4 +2,4 @@
 
 Importable from a CLI, tests, or a future service. See SDD §4.1.
 """
-__version__ = "0.1.0"
+__version__ = "1.0.0"

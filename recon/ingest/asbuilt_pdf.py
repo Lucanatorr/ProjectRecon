@@ -31,12 +31,15 @@ class ExtractionReport:
     n_tables: int = 0
     n_rows: int = 0
     image_only_pages: list[int] = field(default_factory=list)
+    ocr_pages: list[int] = field(default_factory=list)   # scanned pages read by OCR
+    ocr_available: bool = False
     warnings: list[str] = field(default_factory=list)
 
     @property
     def needs_ocr(self) -> bool:
-        """True if any page had no extractable text or table (likely scanned)."""
-        return bool(self.image_only_pages)
+        """True if a scanned page still hasn't been read — OCR was unavailable or
+        found nothing legible."""
+        return bool(set(self.image_only_pages) - set(self.ocr_pages))
 
 
 def _to_float(val) -> float | None:
@@ -73,7 +76,8 @@ def _find_header_idx(grid: list[list[str]]) -> int | None:
     return None
 
 
-def _parse_table(table, source: str, pno: int, tno: int) -> list[AsBuiltLine]:
+def _parse_table(table, source: str, pno: int, tno: int,
+                 confidence: str = "pdf") -> list[AsBuiltLine]:
     """Parse one extracted table into AsBuiltLines (or [] if it has no header)."""
     grid = [[(c or "").strip().replace("\n", " ") for c in row] for row in table]
     hidx = _find_header_idx(grid)
@@ -101,21 +105,25 @@ def _parse_table(table, source: str, pno: int, tno: int) -> list[AsBuiltLine]:
         lines.append(AsBuiltLine(
             raw_desc=desc, qty=qty, uom=uom, segment=(seg or None),
             source_file=source, source_ref=f"page {pno} table {tno} row {r + 1}",
-            confidence="pdf",
+            confidence=confidence,
         ))
     return lines
 
 
 def _group_pdf(lines: list[AsBuiltLine], source: str) -> list[AsBuiltLine]:
-    """Group by normalized description, summing quantity — same as the tally flow,
-    but preserving confidence='pdf'."""
+    """Group by normalized description, summing quantity — same as the tally flow.
+
+    A group keeps the least-trusted confidence of its contributors, so a unit that
+    was partly read by OCR is never presented as a clean PDF extraction."""
     buckets: dict[str, dict] = {}
     for ln in lines:
         key = normalize(ln.raw_desc)
         b = buckets.setdefault(key, {
             "raw_desc": ln.raw_desc, "qty": 0.0, "uom": ln.uom,
-            "segments": set(), "refs": [],
+            "segments": set(), "refs": [], "confidence": ln.confidence,
         })
+        if ln.confidence == "ocr":
+            b["confidence"] = "ocr"
         b["qty"] += ln.qty
         if ln.uom and b["uom"] is None:
             b["uom"] = ln.uom
@@ -132,21 +140,27 @@ def _group_pdf(lines: list[AsBuiltLine], source: str) -> list[AsBuiltLine]:
             segment=", ".join(segs) if segs else None,
             source_file=source,
             source_ref="; ".join(b["refs"]) if b["refs"] else None,
-            confidence="pdf",
+            confidence=b["confidence"],
         ))
     return grouped
 
 
-def extract_asbuilt_pdf(path: str | Path) -> tuple[list[AsBuiltLine], ExtractionReport]:
+def extract_asbuilt_pdf(path: str | Path, *,
+                        ocr: bool = True) -> tuple[list[AsBuiltLine], ExtractionReport]:
     """Extract as-built quantities from a PDF.
 
-    Returns grouped AsBuiltLines (confidence='pdf') plus an ExtractionReport. Pages
-    with no extractable text or table are recorded in ``image_only_pages`` for OCR
-    (Phase 4); pages with text but no detected table raise a warning so the reviewer
-    knows to complete them in the editable grid.
+    Returns grouped AsBuiltLines plus an ExtractionReport. Pages with a text layer
+    are parsed directly (confidence='pdf'). A scanned page — no text, no table — is
+    OCR'd when Tesseract is available and its rows are tagged confidence='ocr' so
+    the UI forces a human to confirm them; when OCR is unavailable the page is
+    reported with an install hint rather than being silently dropped.
     """
+    from recon.ingest.ocr import ocr_status, page_to_grid
+
     p = Path(path)
     report = ExtractionReport(source_file=p.name)
+    ocr_ok, ocr_msg = ocr_status()
+    report.ocr_available = ocr_ok
     raw_lines: list[AsBuiltLine] = []
 
     with pdfplumber.open(p) as pdf:
@@ -154,9 +168,22 @@ def extract_asbuilt_pdf(path: str | Path) -> tuple[list[AsBuiltLine], Extraction
         for pno, page in enumerate(pdf.pages, start=1):
             tables = page.extract_tables() or []
             text = (page.extract_text() or "").strip()
+
             if not tables and not text:
                 report.image_only_pages.append(pno)
+                if ocr and ocr_ok:
+                    grid = page_to_grid(page)
+                    rows = _parse_table(grid, p.name, pno, 1, confidence="ocr") if grid else []
+                    if rows:
+                        report.n_tables += 1
+                        report.ocr_pages.append(pno)
+                        raw_lines.extend(rows)
+                    else:
+                        report.warnings.append(
+                            f"Page {pno}: scanned page — OCR could not make out an "
+                            "as-built table; enter those quantities manually.")
                 continue
+
             parsed_any = False
             for tno, table in enumerate(tables, start=1):
                 rows = _parse_table(table, p.name, pno, tno)
@@ -171,8 +198,15 @@ def extract_asbuilt_pdf(path: str | Path) -> tuple[list[AsBuiltLine], Extraction
 
     grouped = _group_pdf(raw_lines, p.name)
     report.n_rows = len(grouped)
-    if report.needs_ocr:
+
+    if report.ocr_pages:
         report.warnings.append(
-            f"Pages {report.image_only_pages} look scanned (no text) — OCR is not "
-            "enabled yet; enter those quantities manually.")
+            f"Pages {report.ocr_pages} were read by OCR — every number needs "
+            "checking against the source before it counts.")
+    unread = sorted(set(report.image_only_pages) - set(report.ocr_pages))
+    if unread:
+        report.warnings.append(
+            f"Pages {unread} look scanned (no text layer). "
+            + (ocr_msg if not ocr_ok else "OCR found nothing legible.")
+            + " Enter those quantities manually.")
     return grouped, report

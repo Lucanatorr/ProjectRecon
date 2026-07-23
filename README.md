@@ -74,8 +74,46 @@ Implemented end-to-end and validated against the mockup's hand-reconciled cycle
   recorded with actor + timestamp and surfaced in an Export-step viewer. Also
   completes FR-7: confirmed crosswalk mappings now persist **globally** in SQLite,
   so the crosswalk gets smarter across jobs instead of forgetting on restart
-- ⬜ 4.5 OCR for scanned PDFs (needs Tesseract/Poppler system binaries)
-- ⬜ 4.6 Packaging & docs
+- ✅ 4.5 OCR for scanned PDFs — image-only pages are rendered and OCR'd, the
+  recognised words are reassembled into a table, and rows land as
+  `confidence="ocr"` so a human must confirm them. Needs the Tesseract binary; when
+  it's missing the extractor degrades gracefully with an install hint (see below)
+- ✅ 4.6 Packaging & docs — one-command launchers (`run.ps1` / `run.sh`), a pinned
+  `requirements.lock.txt`, a safe backup/restore tool, and configuration,
+  operations, and troubleshooting documentation
+
+## Scanned PDFs (OCR)
+
+Text-based PDFs need nothing extra. **Scanned/image-only** as-builts additionally
+need the Tesseract binary (page rendering uses `pypdfium2`, which ships with
+pdfplumber — no Poppler required).
+
+```powershell
+winget install UB-Mannheim.TesseractOCR
+```
+
+Then reopen your terminal and check it's on PATH:
+
+```powershell
+tesseract --version
+```
+
+If PATH didn't pick it up, either add `C:\Program Files\Tesseract-OCR` to PATH, or
+point the app at the binary in `recon/ingest/ocr.py`:
+
+```python
+pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+```
+
+Verify with the bundled scanned fixture — "Load scan" on the As-built step, or:
+
+```bash
+.venv/Scripts/python.exe -m pytest tests/test_ocr.py -v
+```
+
+The two OCR tests skip without Tesseract and run once it's installed. OCR output is
+always tagged `OCR · verify` and routed through the editable grid — never trusted
+without a human confirming it.
 
 ## Architecture
 
@@ -84,44 +122,71 @@ from a CLI, tests, or a future service — under a Streamlit presentation layer
 (`ui/`, `app.py`) and SQLite persistence.
 
 ```
-recon/            domain core (pure Python)
-  models.py         dataclasses: ContractItem, AsBuiltLine, InvoiceLine, ReconRow, Flag
-  ingest/           normalize, tally, invoices  (asbuilt_pdf → Phase 2)
-  contract.py       bid schedule + change orders
-  crosswalk.py      alias store + rapidfuzz matcher
-  reconcile.py      aggregate → deltas → flags → cycle totals
-  report.py         Excel / text export
-  persistence.py    SQLite CRUD + audit
-ui/               Streamlit wizard, one module per step
-app.py            entry point + step router
-config.py         tolerances, matching threshold, retainage, paths
-samples/          demo data generator (the mockup scenario)
-tests/            unit + golden-file + integration + UI-flow tests
+recon/                  domain core (pure Python, no Streamlit)
+  models.py               ContractItem, AsBuiltLine, InvoiceLine, ReconRow, Flag,
+                          TemplateProfile, UoM, Severity
+  contract.py             bid schedule + change orders
+  crosswalk.py            alias store + rapidfuzz matcher (code AND description)
+  reconcile.py            aggregate → deltas → flags → totals → retainage check
+  report.py               Excel workbook + PDF approval summary
+  persistence.py          SQLite CRUD, cycles, aliases, audit, migrations
+  ingest/
+    normalize.py            string + UoM canonicalization
+    tally.py                xlsx/csv as-built
+    asbuilt_pdf.py          pdfplumber extraction + ExtractionReport
+    invoices.py             xlsx/csv/pdf/zip dispatch + dedupe
+    invoice_pdf.py          PDF invoices + per-contractor templates
+    ocr.py                  scanned-page OCR fallback
+ui/                     Streamlit presentation layer
+  state.py                wizard state, resolutions, fingerprint
+  gates.py                pre-export validation gates
+  theme.py                mockup CSS + HTML builders
+  db.py  progress.py  uploads.py
+  step_*.py               one module per wizard step
+app.py                  entry point + step router
+config.py               tolerances, matching, retainage, OCR, paths
+tools/backup.py         database backup / restore
+samples/                demo + fixture generator
+tests/                  unit · golden-file · integration · UI-flow
 ```
 
-## Setup
+## Quick start
+
+The launcher creates the virtual environment, installs dependencies, and starts
+the app — nothing else to set up:
+
+```powershell
+.\run.ps1
+```
+
+```bash
+./run.sh
+```
+
+Then open **http://localhost:8501**. Append `?demo=1` to preload the full Robeson
+CAB walkthrough, or click **Load sample** on the Contract, As-built, and Invoices
+steps and work through it yourself.
+
+<details>
+<summary>Manual setup, if you'd rather not use the launcher</summary>
 
 ```bash
 python -m venv .venv
-.venv/Scripts/python.exe -m pip install -r requirements.txt   # Windows
-# source .venv/bin/activate && pip install -r requirements.txt  # macOS/Linux
-```
-
-## Run
-
-```bash
+.venv/Scripts/python.exe -m pip install -r requirements.txt      # Windows
+# source .venv/bin/activate && pip install -r requirements.txt   # macOS/Linux
 .venv/Scripts/python.exe -m streamlit run app.py
 ```
+</details>
 
-Then click **Load sample** on each of the Contract, As-built, and Invoices steps
-to walk the Robeson CAB demo, confirm the two crosswalk items, and review the
-reconciliation. Regenerate the sample files with:
-
-```bash
-.venv/Scripts/python.exe samples/generate_samples.py
-```
+`requirements.txt` holds the supported ranges; `requirements.lock.txt` pins the
+exact versions this build was verified against — install from the lock file for a
+reproducible deployment.
 
 ## Test
+
+```powershell
+.\run.ps1 -Test
+```
 
 ```bash
 .venv/Scripts/python.exe -m pytest -q
@@ -129,6 +194,62 @@ reconciliation. Regenerate the sample files with:
 
 The golden-file test (`tests/test_reconcile_golden.py`) encodes the mockup's
 worked example as a known answer and is the primary guard against logic drift.
+Regenerate the sample/fixture files with `python samples/generate_samples.py`.
+
+## Configuration
+
+Tuning lives in `config.py`:
+
+| Setting | Default | Effect |
+|---|---|---|
+| `ToleranceConfig.ft_abs` / `ft_pct` | 50 ft / 2% | Measured-unit tolerance — `max(abs, pct × built)` |
+| `ToleranceConfig.ea_abs` | 0 | Counted units must match exactly |
+| `MatchingConfig.auto_threshold` | 90 | Fuzzy score at or above which the crosswalk auto-maps |
+| `MatchingConfig.scorer` | `WRatio` | rapidfuzz scorer |
+| `ReconConfig.retainage_default_pct` | 10 | Default contract retainage |
+| `OcrConfig.enabled` / `resolution` / `min_confidence` | true / 300 / 40 | Scanned-PDF OCR |
+
+Environment:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `SPLICE_DB_PATH` | `./data/recon.db` | Database location — point it at backed-up storage |
+
+Theme and server options are in `.streamlit/config.toml`.
+
+## Operations
+
+**Back up the database.** Everything durable — projects, contracts, saved cycles,
+results, the global crosswalk aliases, per-contractor templates, and the audit log
+— lives in `data/recon.db`. Snapshot it on your normal backup schedule:
+
+```bash
+python tools/backup.py backup            # -> backups/recon-YYYYmmdd-HHMMSS.db
+python tools/backup.py list
+python tools/backup.py restore backups/recon-20260723-191209.db
+```
+
+This uses SQLite's online-backup API, so a snapshot taken while the app is running
+is still internally consistent — safer than copying the file. A restore keeps the
+database it replaces as `data/recon.pre-restore.db` before overwriting.
+
+**Upgrades are code-only.** Pull, reinstall dependencies (`.\run.ps1 -Update`), and
+restart. The schema self-migrates on open: missing columns are added forward, so an
+older database keeps working. Back up first anyway.
+
+**Routine tasks.** Update a contractor's invoice template when their format changes
+(Invoices → *Column mapping*); the audit log grows slowly and can be trimmed by
+deleting old `audit_log` rows if it ever needs it.
+
+## Troubleshooting
+
+| Symptom | Cause / fix |
+|---|---|
+| Scanned PDF reads as 0 rows | Tesseract isn't installed — see [Scanned PDFs (OCR)](#scanned-pdfs-ocr). The app says so in a warning. |
+| Downloads are greyed out on Export | Pre-export checks haven't passed. Fix the listed items, or record an explicit override. |
+| A description keeps coming back for review | Below the auto-map threshold. Confirm it once — it's saved globally and reused on later jobs. |
+| Port 8501 already in use | `.\run.ps1 -Port 8502` (or `./run.sh --port=8502`). |
+| Numbers look stale after editing inputs | Results recompute from an input fingerprint; if in doubt, revisit Reconciliation. |
 
 ## Key design decisions
 

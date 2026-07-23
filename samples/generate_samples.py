@@ -84,6 +84,29 @@ def write_asbuilt_pdf(path: Path) -> None:
                Spacer(1, 12), table])
 
 
+def write_scanned_asbuilt_pdf(src: Path, path: Path) -> None:
+    """Flatten the as-built PDF into an image-only PDF — i.e. what a scanner
+    produces: no text layer, so only OCR can read it (Sprint 4.5 fixture)."""
+    import io
+
+    import pdfplumber
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfgen import canvas as pdfcanvas
+
+    with pdfplumber.open(src) as pdf:
+        page = pdf.pages[0]
+        width, height = page.width, page.height
+        image = page.to_image(resolution=200).original
+
+    buf = io.BytesIO()
+    image.save(buf, format="PNG")
+    buf.seek(0)
+    c = pdfcanvas.Canvas(str(path), pagesize=(width, height))
+    c.drawImage(ImageReader(buf), 0, 0, width=width, height=height)
+    c.showPage()
+    c.save()
+
+
 def write_invoice_pdf(path: Path, inv_df) -> None:
     """Render the invoice as a gridded PDF table (Sprint 2.4 fixture)."""
     from reportlab.lib import colors
@@ -138,6 +161,8 @@ def main() -> None:
     notes.unlink()
 
     write_asbuilt_pdf(HERE / "AsBuilt_PhaseB.pdf")
+    write_scanned_asbuilt_pdf(HERE / "AsBuilt_PhaseB.pdf",
+                              HERE / "AsBuilt_PhaseB_scanned.pdf")
     write_invoice_pdf(HERE / "Invoice_2025-06_PhaseB.pdf", inv)
     print("Wrote sample files to", HERE)
 
