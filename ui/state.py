@@ -54,6 +54,11 @@ class WizardState:
     results: list[ReconRow] = field(default_factory=list)
     results_fp: str = ""                  # fingerprint of inputs behind `results`
     prior_billed_by_code: dict[str, float] = field(default_factory=dict)  # prior cycle
+    # reviewer decisions on flagged rows: row key -> {status, note, by, at}
+    resolutions: dict[str, dict] = field(default_factory=dict)
+    reviewer: str = ""                    # who is signing off this cycle
+    # explicit, logged override of the pre-export gates: {reason, by, at}
+    override: dict | None = None
     current: str = "contract"
     flash: str = ""                       # one-shot success message after an ingest
 
@@ -85,7 +90,11 @@ def get_state() -> WizardState:
     store = _state_store()
     sid = get_sid()
     if sid not in store:
-        store[sid] = WizardState()
+        ws = WizardState()
+        # seed the crosswalk with every mapping confirmed on past jobs (FR-7)
+        from ui.db import load_aliases
+        ws.aliases = load_aliases()
+        store[sid] = ws
     return store[sid]
 
 
@@ -201,6 +210,44 @@ def _done_steps(state: WizardState) -> set[str]:
 
 def contract_index(state: WizardState) -> dict[str, ContractItem]:
     return {ci.code: ci for ci in state.contract}
+
+
+# --- reviewer resolutions on flagged rows (FR-14) --------------------------- #
+RESOLUTION_STATUSES = ("hold", "approve", "note")
+
+
+def row_key(row) -> str:
+    """Stable identity for a reconciliation row. Unmatched rows have no code, so
+    they fall back to their description."""
+    return row.code or row.description
+
+
+def set_resolution(state: WizardState, key: str, status: str, *,
+                  note: str | None = None, by: str = "") -> None:
+    """Record a reviewer decision (hold / approve / note) against a row.
+
+    ``note=None`` keeps any existing note; ``note=""`` clears it.
+    """
+    from datetime import datetime
+    existing = state.resolutions.get(key, {})
+    state.resolutions[key] = {
+        "status": status,
+        "note": existing.get("note", "") if note is None else note,
+        "by": by or state.reviewer or "",
+        "at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+    }
+
+
+def clear_resolution(state: WizardState, key: str) -> None:
+    state.resolutions.pop(key, None)
+
+
+def unresolved_criticals(state: WizardState) -> list:
+    """Critical rows with no reviewer decision yet — what blocks a clean sign-off."""
+    from recon.models import Severity
+    return [r for r in state.results
+            if r.severity == Severity.CRITICAL
+            and not state.resolutions.get(row_key(r))]
 
 
 def inputs_fingerprint(state: WizardState) -> str:

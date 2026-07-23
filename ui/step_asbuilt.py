@@ -106,6 +106,7 @@ def _uploader(state: WizardState) -> None:
                 step(100, "Done")
             state.asbuilt_source = SAMPLE.name
             state.asbuilt_warnings = []
+            _log_asbuilt_load(state, SAMPLE.name)
             state.flash = f"Loaded {len(state.asbuilt)} built units."
             st.rerun()
     with c3:
@@ -120,6 +121,7 @@ def _uploader(state: WizardState) -> None:
             state.asbuilt = lines
             state.asbuilt_source = PDF_SAMPLE.name
             state.asbuilt_warnings = list(report.warnings)
+            _log_asbuilt_load(state, PDF_SAMPLE.name)
             state.flash = f"Extracted {len(lines)} built units from the PDF."
             st.rerun()
     if up is not None and is_new_upload("asbuilt_up_sig", upload_signature(up)):
@@ -138,10 +140,20 @@ def _uploader(state: WizardState) -> None:
                     state.asbuilt_warnings = []
                 step(100, "Done")
             state.asbuilt_source = up.name
+            _log_asbuilt_load(state, up.name)
             state.flash = f"Loaded {len(state.asbuilt)} built units."
             st.rerun()
         except ValueError as e:
             st.error(f"Could not parse as-built: {e}")
+
+
+def _log_asbuilt_load(state: WizardState, source: str) -> None:
+    from ui.db import log_action
+    kinds = sorted({a.confidence for a in state.asbuilt})
+    log_action("load_asbuilt", "asbuilt", actor=state.reviewer or None,
+               detail={"source": source, "units": len(state.asbuilt),
+                       "confidence": kinds,
+                       "warnings": len(state.asbuilt_warnings)})
 
 
 def _editor(state: WizardState, *, key: str, confirm_label: str,
@@ -169,5 +181,9 @@ def _editor(state: WizardState, *, key: str, confirm_label: str,
             if str(r["Description"]).strip() and str(r["Description"]).strip().lower() != "nan"
         ]
         if confirm:
+            from ui.db import log_action
             state.done.add("asbuilt")
+            log_action("confirm_asbuilt", "asbuilt", actor=state.reviewer or None,
+                       detail={"source": state.asbuilt_source,
+                               "units": len(state.asbuilt)})
         st.rerun()

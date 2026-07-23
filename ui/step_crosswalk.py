@@ -45,29 +45,51 @@ def _process_actions(state: WizardState) -> None:
         desc = qp["xwc"]
         m = resolve(desc, state.contract, state.aliases)
         if m.candidates and m.candidates[0].score >= SUGGEST_THRESHOLD:
-            code = m.candidates[0].code
-            state.not_in_contract.discard(desc)
-            state.resolved[desc] = code
-            state.aliases.confirm(desc, code)
+            _confirm_mapping(state, desc, m.candidates[0].code)
         else:
-            state.resolved.pop(desc, None)
-            state.not_in_contract.add(desc)
+            _mark_not_in_contract(state, desc)
     if "xwmap" in qp:                     # confirm a specific code (from Change)
         desc = qp.get("xwmap")
         code = qp.get("code")
         if desc and code:
             if code == NOT_IN_CONTRACT:
-                state.resolved.pop(desc, None)
-                state.not_in_contract.add(desc)
+                _mark_not_in_contract(state, desc)
             else:
-                state.not_in_contract.discard(desc)
-                state.resolved[desc] = code
-                state.aliases.confirm(desc, code)
+                _confirm_mapping(state, desc, code)
     if "xwreopen" in qp:                  # move a resolved item back to review
-        desc = qp["xwreopen"]
-        state.resolved.pop(desc, None)
-        state.not_in_contract.discard(desc)
-        state.aliases.remove(desc)
+        _reopen_mapping(state, qp["xwreopen"])
+
+
+def _confirm_mapping(state: WizardState, desc: str, code: str) -> None:
+    """Confirm a description → code mapping, learning it globally (FR-7) and
+    recording it in the audit log (FR-17)."""
+    from ui.db import confirm_alias
+    if state.resolved.get(desc) == code:
+        return                            # already settled — don't re-log
+    state.not_in_contract.discard(desc)
+    state.resolved[desc] = code
+    state.aliases.confirm(desc, code)
+    confirm_alias(desc, code, actor=state.reviewer or None)
+
+
+def _mark_not_in_contract(state: WizardState, desc: str) -> None:
+    from ui.db import log_action
+    if desc in state.not_in_contract:
+        return
+    state.resolved.pop(desc, None)
+    state.not_in_contract.add(desc)
+    log_action("mark_not_in_contract", "alias", actor=state.reviewer or None,
+               detail={"desc": desc})
+
+
+def _reopen_mapping(state: WizardState, desc: str) -> None:
+    from ui.db import delete_alias
+    was_mapped = desc in state.resolved or desc in state.not_in_contract
+    state.resolved.pop(desc, None)
+    state.not_in_contract.discard(desc)
+    state.aliases.remove(desc)
+    if was_mapped:
+        delete_alias(desc, actor=state.reviewer or None)
 
 
 def render(state: WizardState) -> None:
@@ -162,12 +184,9 @@ def _edit_widget(state: WizardState, desc: str, m, sid: str) -> None:
             if st.button("Save", type="primary", key=f"xwsave_{desc}"):
                 code = NOT_IN_CONTRACT if choice == NIC else choice.split(" · ")[0]
                 if code == NOT_IN_CONTRACT:
-                    state.resolved.pop(desc, None)
-                    state.not_in_contract.add(desc)
+                    _mark_not_in_contract(state, desc)
                 else:
-                    state.not_in_contract.discard(desc)
-                    state.resolved[desc] = code
-                    state.aliases.confirm(desc, code)
+                    _confirm_mapping(state, desc, code)
                 st.query_params.pop("xwe", None)
                 st.rerun()
 

@@ -60,10 +60,45 @@ def test_workbook_has_expected_tabs(golden_asbuilt, golden_invoices, golden_cont
     assert any(d and "Traffic" in str(d) or d == "—" for d in descs) or unmatched.max_row >= 2
 
 
-def test_pdf_summary_bytes(golden_asbuilt, golden_invoices, golden_contract):
+def _pdf_text(data: bytes) -> str:
+    import pdfplumber
+    with pdfplumber.open(io.BytesIO(data)) as pdf:
+        return "\n".join((p.extract_text() or "") for p in pdf.pages)
+
+
+def test_pdf_summary_is_a_real_pdf(golden_asbuilt, golden_invoices, golden_contract):
     rows = reconcile(golden_asbuilt, golden_invoices, golden_contract)
     totals = cycle_totals(rows, retainage_pct=10.0)
     out = build_pdf_summary(rows, totals, "Cycle 04")
     assert isinstance(out, bytes)
-    assert b"FLAGGED ITEMS" in out
-    assert b"35,408" in out
+    assert out.startswith(b"%PDF")           # a real PDF, not the old text blob
+
+    text = _pdf_text(out)
+    assert "Splice" in text and "Reconciliation Summary" in text
+    assert "Cycle 04" in text
+    assert "35,408" in text                  # headline flagged over-billing
+    assert "Net recommended" in text
+    assert "Sign-off" in text                # approval block for the packet
+    # severity labels render intact (not wrapped by a too-narrow column)
+    assert "CRITICAL" in text and "WARNING" in text
+
+
+def test_pdf_summary_lists_flagged_items(golden_asbuilt, golden_invoices,
+                                        golden_contract):
+    rows = reconcile(golden_asbuilt, golden_invoices, golden_contract)
+    totals = cycle_totals(rows, retainage_pct=10.0)
+    text = _pdf_text(build_pdf_summary(rows, totals, "Cycle 04"))
+    # single-word probes: descriptions wrap across lines inside the table cell
+    assert "Traffic" in text                 # the unauthorized unit
+    assert "ADSS" in text                    # the over-billed aerial unit
+    assert "26,000" in text                  # its dollar exposure
+
+
+def test_pdf_summary_includes_resolutions_when_given(golden_asbuilt, golden_invoices,
+                                                    golden_contract):
+    rows = reconcile(golden_asbuilt, golden_invoices, golden_contract)
+    totals = cycle_totals(rows, retainage_pct=10.0)
+    res = {"3.1": {"status": "hold", "note": "await field verification"}}
+    text = _pdf_text(build_pdf_summary(rows, totals, "Cycle 04", resolutions=res))
+    assert "Resolution" in text
+    assert "HOLD" in text

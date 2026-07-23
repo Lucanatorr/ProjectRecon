@@ -59,8 +59,23 @@ Implemented end-to-end and validated against the mockup's hand-reconciled cycle
   cycle with the same dual-bar language as the reconciliation rows, so a widening
   gap (billing outpacing documented work) is visible across the job
 
-Remaining: **Phase 4 — hardening** (OCR for scanned PDFs, reviewer sign-off + audit
-trail surfacing, PDF approval summary, packaging).
+**Phase 4 (hardening) — in progress, by sprint:**
+- ✅ 4.1 PDF approval summary — a real one-page branded PDF (reportlab): headline
+  metrics, payment recommendation, flagged-items table, and a sign-off block
+- ✅ 4.2 Flag resolution & reviewer sign-off — hold / approve / annotate any flagged
+  row from its drill-down; decisions are stamped with reviewer + time, gate the
+  sign-off ("N critical still need a decision"), persist with the cycle, and appear
+  in the PDF packet
+- ✅ 4.3 Validation gates + logged override — a pre-export checklist (bid schedule,
+  extracted quantities confirmed, crosswalk resolved, critical flags decided) gates
+  the downloads; an explicit override requires a reason, is written to the audit log,
+  and is stamped on both the PDF and the workbook
+- ✅ 4.4 Audit trail — every ingest, mapping, resolution, override, and export is
+  recorded with actor + timestamp and surfaced in an Export-step viewer. Also
+  completes FR-7: confirmed crosswalk mappings now persist **globally** in SQLite,
+  so the crosswalk gets smarter across jobs instead of forgetting on restart
+- ⬜ 4.5 OCR for scanned PDFs (needs Tesseract/Poppler system binaries)
+- ⬜ 4.6 Packaging & docs
 
 ## Architecture
 

@@ -4,13 +4,49 @@ Rendered almost entirely as custom HTML (KPI tiles, chips, <details> rows) to
 match the mockup. Filtering is via the ?flt= query param."""
 from __future__ import annotations
 
+from urllib.parse import quote
+
 import streamlit as st
 
 from recon.models import Severity
 from recon.reconcile import cycle_totals, reconcile
-from ui.state import WizardState, inputs_fingerprint
+from ui.state import (
+    WizardState,
+    clear_resolution,
+    inputs_fingerprint,
+    row_key,
+    set_resolution,
+    unresolved_criticals,
+)
 from ui.step_crosswalk import apply_codes
 from ui.theme import filter_bar_html, kpi_row_html, recon_list_html
+
+_FLAGGED = (Severity.CRITICAL, Severity.WARNING)
+
+
+def _res_href(sid: str, **params) -> str:
+    q = "&".join(f"{k}={quote(str(v))}" for k, v in params.items())
+    return f"?step=reconcile&sid={sid}&{q}"
+
+
+def _process_resolution_actions(state: WizardState) -> None:
+    """Apply hold / approve / clear actions arriving as query-param links."""
+    qp = st.query_params
+    from ui.db import log_action
+    if "res" in qp and "st" in qp:
+        key, status = qp["res"], qp["st"]
+        current = state.resolutions.get(key)
+        # re-applying on every rerun would churn the timestamp — only act on change
+        if not current or current.get("status") != status:
+            set_resolution(state, key, status, by=state.reviewer)
+            log_action("resolve_flag", "recon_result", actor=state.reviewer or None,
+                       detail={"row": key, "status": status})
+    if "resclear" in qp:
+        key = qp["resclear"]
+        if key in state.resolutions:
+            clear_resolution(state, key)
+            log_action("clear_resolution", "recon_result",
+                       actor=state.reviewer or None, detail={"row": key})
 
 
 def run_reconciliation(state: WizardState) -> None:
@@ -45,6 +81,7 @@ def render(state: WizardState) -> None:
         return
 
     ensure_results(state)
+    _process_resolution_actions(state)
     rows = state.results
     totals = cycle_totals(rows, retainage_pct=state.retainage_pct)
 
@@ -95,6 +132,18 @@ def render(state: WizardState) -> None:
     from ui.state import get_sid
     st.markdown(filter_bar_html(flt, counts, get_sid()), unsafe_allow_html=True)
 
+    # reviewer sign-off progress
+    flagged = [r for r in rows if r.severity in _FLAGGED]
+    if flagged:
+        resolved = sum(1 for r in flagged if state.resolutions.get(row_key(r)))
+        open_criticals = len(unresolved_criticals(state))
+        msg = f"{resolved} of {len(flagged)} flagged item(s) reviewed."
+        if open_criticals:
+            st.warning(f"{msg} {open_criticals} critical item(s) still need a "
+                       "hold or approve decision before sign-off.")
+        else:
+            st.success(f"✓ {msg} No critical items are awaiting a decision.")
+
     def keep(r):
         if flt == "all":
             return True
@@ -103,8 +152,58 @@ def render(state: WizardState) -> None:
         return r.severity.value == flt
 
     shown = [r for r in rows if keep(r)]
-    st.markdown(recon_list_html(shown), unsafe_allow_html=True)
-    st.markdown('<div class="hint">Tap any row to see the as-built and invoice '
-                'lines feeding it. Critical flags hold payment; warnings need a '
-                'quick confirm; OK rows reconcile cleanly.</div>',
+    sid = get_sid()
+
+    def _actions(r):
+        """Reviewer action links for a flagged row (hold / approve / note / clear)."""
+        if r.severity not in _FLAGGED:
+            return ""
+        key = row_key(r)
+        links = [
+            f'<a class="btn btn--sm" href="{_res_href(sid, res=key, st="hold")}" '
+            f'target="_self">Hold</a>',
+            f'<a class="btn btn--sm" href="{_res_href(sid, res=key, st="approve")}" '
+            f'target="_self">Approve</a>',
+            f'<a class="btn btn--sm" href="{_res_href(sid, resnote=key)}" '
+            f'target="_self">Note</a>',
+        ]
+        if state.resolutions.get(key):
+            links.append(
+                f'<a class="btn btn--sm" href="{_res_href(sid, resclear=key)}" '
+                f'target="_self">Clear</a>')
+        return ('<div style="display:flex;gap:8px;flex-wrap:wrap">'
+                + "".join(links) + '</div>')
+
+    st.markdown(recon_list_html(shown, state.resolutions, _actions),
                 unsafe_allow_html=True)
+    st.markdown('<div class="hint">Tap any row to see the as-built and invoice '
+                'lines feeding it, and to hold, approve, or annotate it. Critical '
+                'flags hold payment; warnings need a quick confirm.</div>',
+                unsafe_allow_html=True)
+
+    _note_editor(state, sid)
+
+
+def _note_editor(state: WizardState, sid: str) -> None:
+    """Inline note field for the row opened via the "Note" action."""
+    key = st.query_params.get("resnote")
+    if not key:
+        return
+    current = state.resolutions.get(key, {})
+    with st.container(border=True):
+        st.markdown(f'<div class="card__t">Reviewer note · {key}</div>',
+                    unsafe_allow_html=True)
+        text = st.text_input("Note", value=current.get("note", ""),
+                            key=f"resnote_{key}",
+                            placeholder="e.g. awaiting field verification of 2,580 ft")
+        c1, c2, _ = st.columns([1, 1, 4])
+        with c1:
+            if st.button("Save note", type="primary", key=f"savenote_{key}"):
+                set_resolution(state, key, current.get("status") or "note",
+                              note=text, by=state.reviewer)
+                st.query_params.pop("resnote", None)
+                st.rerun()
+        with c2:
+            if st.button("Cancel", key=f"cancelnote_{key}"):
+                st.query_params.pop("resnote", None)
+                st.rerun()

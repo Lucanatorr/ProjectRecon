@@ -104,7 +104,8 @@ CREATE TABLE IF NOT EXISTS recon_result (
   variance      REAL,
   severity      TEXT,
   flags_json    TEXT,
-  resolution    TEXT,
+  resolution    TEXT,                 -- hold | approve | note
+  resolution_note TEXT,               -- reviewer's reason / annotation
   resolved_by   TEXT,
   resolved_at   TEXT
 );
@@ -141,7 +142,25 @@ class Database:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.executescript(SCHEMA)
+        self._migrate()
         self._conn.commit()
+
+    # Lightweight forward migrations: CREATE TABLE IF NOT EXISTS won't add columns
+    # to a database created by an earlier version, so top them up here.
+    _ADDED_COLUMNS = {
+        "recon_result": {"resolution_note": "TEXT"},
+    }
+
+    def _migrate(self) -> None:
+        for table, columns in self._ADDED_COLUMNS.items():
+            existing = {r["name"] for r in
+                        self._conn.execute(f"PRAGMA table_info({table})")}
+            if not existing:                     # table absent entirely
+                continue
+            for col, decl in columns.items():
+                if col not in existing:
+                    self._conn.execute(
+                        f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
 
     @contextmanager
     def tx(self):
@@ -272,6 +291,13 @@ class Database:
             )
         self.log(actor, "confirm_alias", "alias", detail={"desc": raw_desc, "code": code})
 
+    def delete_alias(self, raw_desc: str, actor: str | None = None) -> None:
+        """Forget a learned mapping (the coordinator re-opened it for review)."""
+        key = normalize(raw_desc)
+        with self.tx() as cur:
+            cur.execute("DELETE FROM alias WHERE normalized_desc=?", (key,))
+        self.log(actor, "delete_alias", "alias", detail={"desc": raw_desc})
+
     # --- template profiles (global, per contractor) ---
     def save_template_profile(self, profile: TemplateProfile,
                              actor: str | None = None) -> None:
@@ -318,22 +344,30 @@ class Database:
                  detail={"contractor": contractor})
 
     # --- results ---
-    def save_results(self, cycle_id: int, rows: list[ReconRow]) -> None:
+    def save_results(self, cycle_id: int, rows: list[ReconRow],
+                    resolutions: dict | None = None) -> None:
+        """Persist the cycle's rows. ``resolutions`` maps row key (code, or the
+        description for unmatched rows) → {status, note, by, at}."""
+        resolutions = resolutions or {}
         with self.tx() as cur:
             cur.execute("DELETE FROM recon_result WHERE cycle_id=?", (cycle_id,))
             for r in rows:
+                res = resolutions.get(r.code or r.description) or {}
                 cur.execute(
                     """INSERT INTO recon_result
                        (cycle_id, code, description, uom, built_qty, billed_qty,
                         contract_price, billed_price, est_qty, billed_amount,
-                        expected_amount, variance, severity, flags_json)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        expected_amount, variance, severity, flags_json,
+                        resolution, resolution_note, resolved_by, resolved_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (cycle_id, r.code, r.description, r.uom.value, r.built_qty,
                      r.billed_qty, r.contract_price, r.billed_price, r.est_qty,
                      r.billed_amount, r.expected_amount, r.amount_variance,
                      r.severity.value,
                      json.dumps([{"rule": f.rule, "severity": f.severity.value,
-                                  "message": f.message} for f in r.flags])),
+                                  "message": f.message} for f in r.flags]),
+                     res.get("status"), res.get("note") or None,
+                     res.get("by") or None, res.get("at")),
                 )
 
     def load_results(self, cycle_id: int) -> list[sqlite3.Row]:
@@ -381,7 +415,8 @@ class Database:
                            area: str | None, cycle_no: int, period_label: str | None,
                            billing_mode: str, retainage_pct: float,
                            prior_billed: float, contract_items: list[ContractItem],
-                           rows: list[ReconRow], actor: str | None = None) -> tuple[int, int]:
+                           rows: list[ReconRow], actor: str | None = None,
+                           resolutions: dict | None = None) -> tuple[int, int]:
         """Persist a finalized cycle: project + contract + cycle metadata + results.
         Idempotent per (project, cycle_no) — re-saving overwrites."""
         pid = self.get_or_create_project(project_name, contractor, area)
@@ -389,9 +424,10 @@ class Database:
         cid = self.get_or_create_cycle(
             pid, cycle_no, period_label=period_label, billing_mode=billing_mode,
             retainage_pct=retainage_pct, prior_billed_to_date=prior_billed)
-        self.save_results(cid, rows)
+        self.save_results(cid, rows, resolutions)
         self.log(actor, "save_cycle", "billing_cycle", cid,
-                 {"project": project_name, "cycle_no": cycle_no, "n_units": len(rows)})
+                 {"project": project_name, "cycle_no": cycle_no, "n_units": len(rows),
+                  "n_resolved": len(resolutions or {})})
         return pid, cid
 
     def trend(self, project_id: int) -> list[dict]:

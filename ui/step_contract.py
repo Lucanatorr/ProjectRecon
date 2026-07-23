@@ -81,11 +81,15 @@ def render(state: WizardState) -> None:
 
 
 def _apply_co(state: WizardState, path) -> None:
+    from ui.db import log_action
     with loading_bar("Applying change order…") as step:
         step(50, "Extending contract…")
         state.contract = apply_change_orders(state.contract, path)
         step(100, "Done")
     n_co = sum(1 for ci in state.contract if ci.is_change_order)
+    log_action("apply_change_order", "contract", actor=state.reviewer or None,
+               detail={"source": getattr(path, "name", str(path)),
+                       "change_order_items": n_co})
     state.flash = f"Change order applied — {n_co} change-order item(s) in the contract."
 
 
@@ -105,6 +109,7 @@ def _uploader(state: WizardState, compact: bool = False) -> None:
                 step(100, "Done")
             state.contract_source = SAMPLE.name
             state.done.add("contract")
+            _log_contract_load(state, SAMPLE.name)
             state.flash = f"Loaded {len(state.contract)} contract units."
             st.rerun()
     if up is not None and is_new_upload("contract_up_sig", upload_signature(up)):
@@ -117,10 +122,17 @@ def _uploader(state: WizardState, compact: bool = False) -> None:
                 step(100, "Done")
             state.contract_source = up.name
             state.done.add("contract")
+            _log_contract_load(state, up.name)
             state.flash = f"Loaded {len(state.contract)} contract units."
             st.rerun()
         except ValueError as e:
             st.error(f"Could not parse bid schedule: {e}")
+
+
+def _log_contract_load(state: WizardState, source: str) -> None:
+    from ui.db import log_action
+    log_action("load_contract", "contract", actor=state.reviewer or None,
+               detail={"source": source, "units": len(state.contract)})
 
 
 def _editor(state: WizardState) -> None:
