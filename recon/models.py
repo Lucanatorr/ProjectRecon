@@ -121,6 +121,7 @@ class ReconRow:
     est_qty: float | None
     flags: list[Flag] = field(default_factory=list)
     is_change_order: bool = False       # authorized via a change order
+    prior_billed_qty: float | None = None   # this unit's billed-to-date last cycle
     # Contributing source-line references for drill-down / traceability.
     asbuilt_refs: list[str] = field(default_factory=list)
     invoice_refs: list[str] = field(default_factory=list)
@@ -135,6 +136,14 @@ class ReconRow:
         if self.contract_price is None:
             return 0.0
         return self.billed_price - self.contract_price
+
+    @property
+    def current_period_qty(self) -> float | None:
+        """This period's quantity = billed-to-date − prior cumulative (cumulative
+        pay apps). None when there is no prior cycle to compare against."""
+        if self.prior_billed_qty is None:
+            return None
+        return self.billed_qty - self.prior_billed_qty
 
     # --- derived money ---
     @property

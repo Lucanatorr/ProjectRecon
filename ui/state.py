@@ -53,6 +53,7 @@ class WizardState:
 
     results: list[ReconRow] = field(default_factory=list)
     results_fp: str = ""                  # fingerprint of inputs behind `results`
+    prior_billed_by_code: dict[str, float] = field(default_factory=dict)  # prior cycle
     current: str = "contract"
     flash: str = ""                       # one-shot success message after an ingest
 
@@ -215,5 +216,6 @@ def inputs_fingerprint(state: WizardState) -> str:
         *(f"{i.invoice_id}|{i.raw_desc}|{i.qty}|{i.unit_price}" for i in state.invoices),
         *(f"{k}->{v}" for k, v in sorted(state.resolved.items())),
         *(f"nic:{d}" for d in sorted(state.not_in_contract)),
+        *(f"prior:{k}={v}" for k, v in sorted(state.prior_billed_by_code.items())),
     ]
     return hashlib.sha1("\n".join(parts).encode("utf-8")).hexdigest()

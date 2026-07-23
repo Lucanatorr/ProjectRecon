@@ -119,12 +119,18 @@ def reconcile(
     invoices: list[InvoiceLine],
     contract: list[ContractItem] | dict[str, ContractItem],
     cfg: ReconConfig = RECON,
+    prior_billed: dict[str, float] | None = None,
 ) -> list[ReconRow]:
-    """Produce one ReconRow per code present in as-built or invoices."""
+    """Produce one ReconRow per code present in as-built or invoices.
+
+    ``prior_billed`` maps code → the prior cycle's billed-to-date quantity; in
+    cumulative mode it enables the current-vs-prior check (SDD §7.5).
+    """
     contract_idx: dict[str, ContractItem] = (
         contract if isinstance(contract, dict) else {ci.code: ci for ci in contract}
     )
     aggs = aggregate(asbuilt, invoices, cumulative=cfg.cumulative)
+    use_prior = cfg.cumulative and bool(prior_billed)
 
     rows: list[ReconRow] = []
     for a in aggs.values():
@@ -143,6 +149,7 @@ def reconcile(
             billed_price=a.billed_price,
             est_qty=ci.est_qty if ci else None,
             is_change_order=bool(ci.is_change_order) if ci else False,
+            prior_billed_qty=(prior_billed.get(code) if (use_prior and code) else None),
             asbuilt_refs=a.asbuilt_refs,
             invoice_refs=a.invoice_refs,
         )
@@ -192,6 +199,15 @@ def flags_for(row: ReconRow, cfg: ReconConfig = RECON) -> list[Flag]:
         flags.append(Flag(
             "unmatched", Severity.WARNING,
             "Line not matched to a contract unit — resolve in crosswalk before finalize",
+        ))
+    # cumulative pay app: billed-to-date must not fall below the prior cycle
+    if (cfg.cumulative and row.prior_billed_qty is not None
+            and row.prior_billed_qty - row.billed_qty > tol):
+        flags.append(Flag(
+            "cumulative_decrease", Severity.WARNING,
+            f"Billed-to-date {row.billed_qty:,.6g} fell below prior cycle "
+            f"{row.prior_billed_qty:,.6g} {row.uom.value} — a cumulative pay app "
+            "should not decrease",
         ))
 
     # --- INFO ---

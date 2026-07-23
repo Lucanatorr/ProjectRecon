@@ -15,7 +15,8 @@ Implemented end-to-end and validated against the mockup's hand-reconciled cycle
 - Contract bid-schedule load (xlsx/csv) + change orders
 - Tally-sheet (xlsx/csv) as-built ingest with grouping + subtotal-row rejection
 - Invoice (xlsx/csv/**zip**) ingest with dedupe on re-upload
-- Persistent, learning crosswalk (exact alias → fuzzy `WRatio` → human confirm)
+- Persistent, learning crosswalk matching on **both contract columns** — exact alias
+  → exact code → best fuzzy (`WRatio`) of code vs description → human confirm
 - Reconciliation engine: quantity / price / dollar variance, per-UoM tolerances,
   severity-tagged flags, cumulative-to-date pay-app handling, retainage
 - SQLite persistence (projects, contracts, cycles, global aliases, results, audit)
@@ -38,7 +39,7 @@ Implemented end-to-end and validated against the mockup's hand-reconciled cycle
   contractor's PDF invoices, with a column-mapping panel to set one up when columns
   don't auto-detect
 
-**Phase 3 (progress billing) — in progress, by sprint:**
+**Phase 3 (progress billing) — complete, by sprint:**
 - ✅ 3.1 Change orders — a CO schedule extends/revises the contract (`is_change_order`);
   CO-authorized units clear the unauthorized/over-price flags and show a CO marker on
   the reconciliation row
@@ -50,11 +51,16 @@ Implemented end-to-end and validated against the mockup's hand-reconciled cycle
   contract + cycle metadata + per-unit results) to SQLite, idempotent per
   (project, cycle_no); a "Saved cycles" table loads prior cycles back, surviving
   session reloads
-- ⬜ 3.4 Current-vs-prior validation (cumulative pay-app check)
-- ⬜ 3.5 Built-to-date vs billed-to-date trend
+- ✅ 3.4 Current-vs-prior validation — in cumulative mode the engine loads the prior
+  saved cycle's per-unit billed-to-date, computes each unit's current-period quantity
+  (to-date − prior), and warns when billed-to-date falls below the prior cycle (a
+  cumulative pay app should not decrease); shown per-row in the drill-down
+- ✅ 3.5 Built-to-date vs billed-to-date trend — the Export step charts each saved
+  cycle with the same dual-bar language as the reconciliation rows, so a widening
+  gap (billing outpacing documented work) is visible across the job
 
-Later phases (OCR for scanned PDFs, PDF approval packet, reviewer sign-off) are
-scaffolded in the design but not yet built.
+Remaining: **Phase 4 — hardening** (OCR for scanned PDFs, reviewer sign-off + audit
+trail surfacing, PDF approval summary, packaging).
 
 ## Architecture
 

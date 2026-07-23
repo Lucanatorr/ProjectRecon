@@ -114,7 +114,7 @@ def render(state: WizardState) -> None:
         if m.candidates and m.candidates[0].score >= SUGGEST_THRESHOLD:
             c = m.candidates[0]
             sug = (f'maps to → <b>{c.code} · {code_desc.get(c.code, c.description)}</b> '
-                   f'<span class="score">{c.score:.0f}% match</span>')
+                   f'<span class="score">{c.score:.0f}% · {c.field}</span>')
             cards.append(xw_card_html(d, sug, _href(sid, xwc=d), _href(sid, xwe=d),
                                       confirm_label="Confirm"))
         else:

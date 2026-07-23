@@ -214,6 +214,13 @@ html, body, [data-testid="stApp"], [data-testid="stAppViewContainer"], [data-tes
 .feed span{font-family:var(--mono);font-size:11.5px;color:var(--muted-2);flex:none;width:120px;}
 .hint{font-size:12px;color:var(--muted-2);margin-top:14px;padding-left:2px;}
 
+/* ---------- multi-cycle trend (reuses the built-vs-billed bar language) ---------- */
+.trend{display:flex;flex-direction:column;}
+.trow{display:grid;grid-template-columns:1.1fr 2fr 1fr;gap:20px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line-soft);}
+.trow:last-child{border-bottom:0;}
+.trow__k{font-weight:600;font-size:13.5px;color:var(--text);}
+.trow__s{font-size:11px;color:var(--muted-2);margin-top:2px;text-transform:uppercase;letter-spacing:.4px;}
+
 /* ---------- cards / tables ---------- */
 .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:20px 22px;margin-bottom:16px;}
 .card__h{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap;}
@@ -446,6 +453,11 @@ def _feed_rows(row: ReconRow) -> str:
     if row.invoice_refs:
         feeds.append(f'<div class="feed"><span>Invoice</span><div>'
                      f'{_esc("; ".join(row.invoice_refs))}</div></div>')
+    if row.prior_billed_qty is not None:
+        feeds.append(
+            f'<div class="feed"><span>Prior cycle</span><div>billed-to-date '
+            f'<b>{_qty(row.prior_billed_qty)}</b>; this period '
+            f'<b>{_qty(row.current_period_qty)}</b> {row.uom.value}</div></div>')
     for f in row.flags:
         feeds.append(f'<div class="feed"><span>Finding</span><div>'
                      f'<b>{_esc(f.severity.value.upper())}</b> — {_esc(f.message)}</div></div>')
@@ -505,6 +517,39 @@ def recon_list_html(rows: list[ReconRow]) -> str:
     return f'<div class="recon">{"".join(recon_row_html(r) for r in rows)}</div>'
 
 
+def trend_html(cycles: list[dict]) -> str:
+    """Built-to-date vs billed-to-date per saved cycle, drawn with the same dual-bar
+    language as the reconciliation rows. ``cycles`` are cycle_summary dicts."""
+    if not cycles:
+        return ""
+    scale = max([max(c.get("expected") or 0.0, c.get("billed") or 0.0)
+                 for c in cycles] + [1.0])
+    rows = []
+    for c in cycles:
+        built = c.get("expected") or 0.0
+        billed = c.get("billed") or 0.0
+        var = billed - built
+        var_cls = "up" if var > 0.5 else ("dn" if var < -0.5 else "ok")
+        rows.append(
+            '<div class="trow"><div>'
+            f'<div class="trow__k">Cycle {int(c["cycle_no"]):02d}</div>'
+            f'<div class="trow__s">{_esc(c.get("period_label") or "—")}</div></div>'
+            '<div class="bars">'
+            '<div class="bline"><span class="bline__k">Built</span>'
+            '<div class="btrack"><div class="bfill bfill--built" '
+            f'style="width:{100 * built / scale:.1f}%"></div></div>'
+            f'<span class="bline__v">${built:,.0f}</span></div>'
+            '<div class="bline"><span class="bline__k">Billed</span>'
+            '<div class="btrack"><div class="bfill bfill--billed" '
+            f'style="width:{100 * billed / scale:.1f}%"></div></div>'
+            f'<span class="bline__v">${billed:,.0f}</span></div>'
+            '</div>'
+            '<div class="rvar"><div class="rvar__l">Variance</div>'
+            f'<div class="rvar__v {var_cls}">{_money_signed(var)}</div></div>'
+            '</div>')
+    return '<div class="trend">' + "".join(rows) + '</div>'
+
+
 # --------------------------------------------------------------------------- #
 #  cards / tables / files / crosswalk
 # --------------------------------------------------------------------------- #
@@ -557,15 +602,17 @@ def xw_card_html(raw: str, suggestion_html: str, confirm_href: str,
     """One crosswalk review card. Actions are query-param links (state persists
     across the reload, so this stays purely declarative HTML).
 
-    Emitted as a single blank-line-free string: a whitespace-only line (e.g. from
-    an omitted "Change" link) would read as a Markdown blank line and terminate the
-    HTML block, spilling every following card out as raw text.
+    Both a confirm action and a "Change" link (manual mapping) are always shown —
+    including for low-confidence / not-in-contract items — so any description can be
+    mapped to a unit by hand. Emitted as a single blank-line-free string so a
+    whitespace-only line can't read as a Markdown blank line and spill the HTML.
     """
-    actions = (f'<a class="btn btn--pri btn--sm" href="{confirm_href}" '
-               f'target="_self">{_esc(confirm_label)}</a>')
-    if not low:
-        actions += (f'<a class="btn btn--sm" href="{change_href}" '
-                    f'target="_self">Change</a>')
+    change_label = "Map manually" if low else "Change"
+    actions = (
+        f'<a class="btn btn--pri btn--sm" href="{confirm_href}" '
+        f'target="_self">{_esc(confirm_label)}</a>'
+        f'<a class="btn btn--sm" href="{change_href}" '
+        f'target="_self">{change_label}</a>')
     return (
         '<div class="xw"><div>'
         '<div class="xw__from">Source text</div>'

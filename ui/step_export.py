@@ -10,7 +10,7 @@ from recon.models import Severity
 from recon.reconcile import cycle_totals
 from recon.report import build_pdf_summary, build_workbook
 from ui.state import WizardState, get_sid
-from ui.theme import _esc, card_open, lede, table_html, td
+from ui.theme import _esc, card_close, card_open, lede, table_html, td, trend_html
 
 _LEDE = ("One workbook for the payment packet: a summary, the flagged items to hold, "
          "the full reconciled detail, and anything that couldn't be matched. Every "
@@ -150,7 +150,8 @@ def _cycle_history(state: WizardState, rows, totals) -> None:
 
     history = cycle_history(proj)
     if not history:
-        st.caption("No saved cycles yet for this project.")
+        st.caption("No saved cycles yet for this project — save one to start the "
+                   "built-vs-billed trend.")
         return
 
     headers = [("Cycle", ""), ("Period", ""), ("Mode", ""), ("Billed", "r"),
@@ -168,7 +169,14 @@ def _cycle_history(state: WizardState, rows, totals) -> None:
             td((s["created_at"] or "")[:16]),
         ])
     st.markdown(card_open(f"Saved cycles · {proj}") + table_html(headers, body)
-                + "</div>", unsafe_allow_html=True)
+                + card_close(), unsafe_allow_html=True)
+
+    # built-to-date vs billed-to-date across the job (FR-16)
+    st.markdown(
+        card_open("Built vs billed by cycle",
+                  "cumulative to date — widening bars mean billing outpacing "
+                  "documented work")
+        + trend_html(history) + card_close(), unsafe_allow_html=True)
 
 
 def _summary_table(totals, chk=None) -> str:

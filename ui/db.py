@@ -59,3 +59,15 @@ def cycle_history(project_name: str) -> list[dict]:
         return db.cycle_summaries(proj["id"]) if proj else []
     finally:
         db.close()
+
+
+def prior_billed(project_name: str, before_cycle_no: int) -> dict[str, float]:
+    """Per-unit billed-to-date from the project's most recent cycle before this one."""
+    if not project_name:
+        return {}
+    db = Database()
+    try:
+        proj = db.project_by_name(project_name)
+        return db.prior_billed_by_code(proj["id"], before_cycle_no) if proj else {}
+    finally:
+        db.close()

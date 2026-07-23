@@ -21,7 +21,8 @@ def run_reconciliation(state: WizardState) -> None:
         retainage_default_pct=state.retainage_pct,
         cumulative=state.billing_mode == "cumulative",
     )
-    state.results = reconcile(state.asbuilt, state.invoices, state.contract, cfg)
+    state.results = reconcile(state.asbuilt, state.invoices, state.contract, cfg,
+                             prior_billed=state.prior_billed_by_code or None)
     state.results_fp = inputs_fingerprint(state)
     state.done.add("reconcile")
 
@@ -29,6 +30,11 @@ def run_reconciliation(state: WizardState) -> None:
 def ensure_results(state: WizardState) -> None:
     """Recompute reconciliation only when inputs changed since the last run.
     Keeps Reconciliation and Export screens consistent regardless of nav order."""
+    # load the prior cycle's per-unit billed-to-date (cumulative current-vs-prior)
+    from ui.db import prior_billed as _load_prior
+    state.prior_billed_by_code = (
+        _load_prior(state.project_name, int(state.cycle_no))
+        if state.billing_mode == "cumulative" else {})
     if not state.results or state.results_fp != inputs_fingerprint(state):
         run_reconciliation(state)
 
@@ -64,6 +70,17 @@ def render(state: WizardState) -> None:
     if chk.has_actual:
         (st.success if chk.ok else st.warning)(
             ("✓ " if chk.ok else "") + chk.message)
+
+    # current-vs-prior comparison status
+    if state.prior_billed_by_code:
+        n_dec = sum(1 for r in rows
+                    if any(f.rule == "cumulative_decrease" for f in r.flags))
+        note = (f"Cumulative mode — comparing billed-to-date against the prior saved "
+                f"cycle ({len(state.prior_billed_by_code)} units).")
+        if n_dec:
+            st.warning(f"{note} {n_dec} unit(s) billed less than last cycle.")
+        else:
+            st.caption(note)
 
     # filter chips (?flt=)
     counts = {

@@ -365,6 +365,18 @@ class Database:
     def cycle_summaries(self, project_id: int) -> list[dict]:
         return [self.cycle_summary(c["id"]) for c in self.list_cycles(project_id)]
 
+    def prior_billed_by_code(self, project_id: int, before_cycle_no: int) -> dict[str, float]:
+        """Per-unit billed-to-date from the most recent saved cycle before
+        ``before_cycle_no`` — the prior cumulative for the current-vs-prior check."""
+        row = self._conn.execute(
+            """SELECT id FROM billing_cycle WHERE project_id=? AND cycle_no < ?
+               ORDER BY cycle_no DESC LIMIT 1""",
+            (project_id, before_cycle_no)).fetchone()
+        if row is None:
+            return {}
+        return {r["code"]: (r["billed_qty"] or 0.0)
+                for r in self.load_results(row["id"]) if r["code"]}
+
     def save_cycle_snapshot(self, *, project_name: str, contractor: str | None,
                            area: str | None, cycle_no: int, period_label: str | None,
                            billing_mode: str, retainage_pct: float,
