@@ -21,10 +21,13 @@ class UoM(str, Enum):
         """Best-effort parse; returns None for unknown/blank input."""
         if raw is None:
             return None
+        # NOTE: keys must be written in normalized form — upper-case, no spaces —
+        # to match `key` below (e.g. "Per Foot" arrives here as "PERFOOT").
         key = str(raw).strip().upper().replace(" ", "")
         aliases = {
             "EA": cls.EA, "EACH": cls.EA, "E": cls.EA,
-            "FT": cls.FT, "F": cls.FT, "LF": cls.FT, "FOOT": cls.FT, "FEET": cls.FT, "Per Foot": cls.FT,
+            "FT": cls.FT, "F": cls.FT, "LF": cls.FT, "FOOT": cls.FT, "FEET": cls.FT,
+            "PERFOOT": cls.FT,
             "100FT": cls.C_FT, "C_FT": cls.C_FT, "CFT": cls.C_FT, "MFT": cls.C_FT,
             "LS": cls.LS, "LUMPSUM": cls.LS, "LUMP": cls.LS,
         }
