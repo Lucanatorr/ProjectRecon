@@ -27,6 +27,7 @@ class Candidate:
     code: str
     description: str
     score: float
+    field: str = "description"      # which column produced the score: code | description
 
 
 @dataclass
@@ -80,11 +81,16 @@ def resolve(
     scorer: str | None = None,
     top_n: int | None = None,
 ) -> Match:
-    """Resolve a free-text description to a canonical code.
+    """Resolve free text to a canonical code, matching on BOTH contract columns.
 
-    1. Exact alias hit  -> auto-map (score 100, kind "alias").
-    2. Fuzzy >= threshold -> auto-map (kind "auto").
-    3. Below threshold   -> kind "review" with top-N candidates for the UI.
+    Source text is often the contract *code* itself (e.g. "BHF-48", "AFO.SL"), not
+    a description, so every contract item is scored against its code and its
+    description and keeps the better of the two.
+
+    1. Exact alias hit        -> auto-map (score 100, kind "alias").
+    2. Exact code match       -> auto-map (score 100, kind "code").
+    3. Best fuzzy >= threshold-> auto-map (kind "auto").
+    4. Below threshold        -> kind "review" with top-N candidates for the UI.
     """
     threshold = MATCHING.auto_threshold if threshold is None else threshold
     scorer_name = scorer or MATCHING.scorer
@@ -101,18 +107,33 @@ def resolve(
     if not contract_items:
         return Match(code=None, score=0.0, kind="review")
 
-    # Map normalized contract description -> code (handle dup descriptions).
-    choices: dict[str, str] = {}   # normalized_desc -> code
-    for ci in contract_items:
-        choices[normalize(ci.description)] = ci.code
-    desc_by_code = {ci.code: ci.description for ci in contract_items}
+    norm_codes = [normalize(ci.code) for ci in contract_items]
+    norm_descs = [normalize(ci.description) for ci in contract_items]
 
-    # extract returns list of (matched_choice_key, score, index-or-key)
-    results = process.extract(key, list(choices.keys()), scorer=scorer_fn, limit=top_n)
-    candidates: list[Candidate] = []
-    for matched_desc, score, _ in results:
-        code = choices[matched_desc]
-        candidates.append(Candidate(code=code, description=desc_by_code.get(code, matched_desc), score=float(score)))
+    # A code is a precise identifier — an exact hit settles it outright.
+    if key:
+        for i, nc in enumerate(norm_codes):
+            if nc and nc == key:
+                ci = contract_items[i]
+                return Match(code=ci.code, score=100.0, kind="code",
+                             candidates=[Candidate(ci.code, ci.description, 100.0, "code")])
+
+    # Score every item against both columns, keeping whichever matched better.
+    code_scores = {i: s for _, s, i in
+                   process.extract(key, norm_codes, scorer=scorer_fn, limit=None)}
+    desc_scores = {i: s for _, s, i in
+                   process.extract(key, norm_descs, scorer=scorer_fn, limit=None)}
+
+    scored: list[Candidate] = []
+    for i, ci in enumerate(contract_items):
+        s_code = float(code_scores.get(i, 0.0))
+        s_desc = float(desc_scores.get(i, 0.0))
+        if s_code >= s_desc:
+            scored.append(Candidate(ci.code, ci.description, s_code, "code"))
+        else:
+            scored.append(Candidate(ci.code, ci.description, s_desc, "description"))
+    scored.sort(key=lambda c: -c.score)
+    candidates = scored[:top_n]
 
     if not candidates:
         return Match(code=None, score=0.0, kind="review")

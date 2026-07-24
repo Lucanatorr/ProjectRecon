@@ -12,6 +12,8 @@ venv/
 # Local data & secrets
 data/*.db
 data/*.db-journal
+data/*.pre-restore.db
+backups/
 *.log
 
 # OS / editor
@@ -26,3 +28,6 @@ Thumbs.db
 # Scratch / uploads
 uploads/
 tmp/
+
+# Claude
+.claude/

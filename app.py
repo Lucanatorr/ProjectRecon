@@ -79,6 +79,9 @@ def render_sidebar(state, sid: str) -> None:
         state.cycle_no = st.number_input("Cycle no.", min_value=1,
                                         value=int(state.cycle_no or 1))
         state.period_label = st.text_input("Period label", state.period_label)
+        state.reviewer = st.text_input("Reviewer", state.reviewer,
+                                       help="Recorded against flag resolutions "
+                                            "and the sign-off.")
 
 
 def main() -> None:

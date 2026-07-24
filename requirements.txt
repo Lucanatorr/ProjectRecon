@@ -12,8 +12,7 @@ pydantic>=2.7
 # Dev / test
 pytest>=8.2
 
-# Optional (Phase 2/4) — uncomment when needed
-# pdf2image
-# pytesseract
-# ocrmypdf
-# camelot-py
+# OCR for scanned PDFs (Phase 4). The Python package installs from pip, but it
+# also needs the Tesseract *binary* on PATH — see "Scanned PDFs (OCR)" in the
+# README. Without it the app degrades gracefully and says how to install it.
+pytesseract>=0.3.10

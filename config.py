@@ -44,6 +44,15 @@ class MatchingConfig:
 
 
 @dataclass(frozen=True)
+class OcrConfig:
+    """OCR fallback for scanned PDFs (SDD Appendix B). Needs the Tesseract binary;
+    when it's missing the extractor degrades gracefully instead of failing."""
+    enabled: bool = True
+    resolution: int = 300        # render DPI before OCR
+    min_confidence: int = 40     # drop words Tesseract isn't sure about
+
+
+@dataclass(frozen=True)
 class ReconConfig:
     """Bundle passed into the reconcile engine."""
     tolerance: ToleranceConfig = field(default_factory=ToleranceConfig)
@@ -57,6 +66,7 @@ class ReconConfig:
 TOLERANCE = ToleranceConfig()
 MATCHING = MatchingConfig()
 RECON = ReconConfig()
+OCR = OcrConfig()
 
 # SQLite location — overridable via env for tests / alt deployments.
 DB_PATH = Path(os.environ.get("SPLICE_DB_PATH", str(DATA_DIR / "recon.db")))

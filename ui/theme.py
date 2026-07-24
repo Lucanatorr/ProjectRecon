@@ -214,6 +214,23 @@ html, body, [data-testid="stApp"], [data-testid="stAppViewContainer"], [data-tes
 .feed span{font-family:var(--mono);font-size:11.5px;color:var(--muted-2);flex:none;width:120px;}
 .hint{font-size:12px;color:var(--muted-2);margin-top:14px;padding-left:2px;}
 
+/* ---------- pre-export validation gates ---------- */
+.gates{display:flex;flex-direction:column;}
+.gate{display:grid;grid-template-columns:auto 1fr auto;gap:14px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line-soft);}
+.gate:last-child{border-bottom:0;}
+.gate__l{font-weight:600;font-size:13.5px;color:var(--text);}
+.gate__d{font-size:12px;color:var(--muted);margin-top:2px;}
+.gate__mark{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-size:11px;font-weight:700;color:#fff;}
+.gate__mark--ok{background:var(--ok);}
+.gate__mark--no{background:var(--critical);}
+
+/* ---------- multi-cycle trend (reuses the built-vs-billed bar language) ---------- */
+.trend{display:flex;flex-direction:column;}
+.trow{display:grid;grid-template-columns:1.1fr 2fr 1fr;gap:20px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line-soft);}
+.trow:last-child{border-bottom:0;}
+.trow__k{font-weight:600;font-size:13.5px;color:var(--text);}
+.trow__s{font-size:11px;color:var(--muted-2);margin-top:2px;text-transform:uppercase;letter-spacing:.4px;}
+
 /* ---------- cards / tables ---------- */
 .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:20px 22px;margin-bottom:16px;}
 .card__h{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap;}
@@ -446,6 +463,11 @@ def _feed_rows(row: ReconRow) -> str:
     if row.invoice_refs:
         feeds.append(f'<div class="feed"><span>Invoice</span><div>'
                      f'{_esc("; ".join(row.invoice_refs))}</div></div>')
+    if row.prior_billed_qty is not None:
+        feeds.append(
+            f'<div class="feed"><span>Prior cycle</span><div>billed-to-date '
+            f'<b>{_qty(row.prior_billed_qty)}</b>; this period '
+            f'<b>{_qty(row.current_period_qty)}</b> {row.uom.value}</div></div>')
     for f in row.flags:
         feeds.append(f'<div class="feed"><span>Finding</span><div>'
                      f'<b>{_esc(f.severity.value.upper())}</b> — {_esc(f.message)}</div></div>')
@@ -455,7 +477,31 @@ def _feed_rows(row: ReconRow) -> str:
     return "".join(feeds)
 
 
-def recon_row_html(row: ReconRow, open_: bool = False) -> str:
+_RES_CHIP = {"hold": "critical", "approve": "ok", "note": "info"}
+_RES_LABEL = {"hold": "Held", "approve": "Approved", "note": "Noted"}
+
+
+def _resolution_feed(resolution: dict | None, actions_html: str) -> str:
+    """Drill-down row showing the reviewer's decision plus the action links."""
+    if resolution:
+        status = resolution.get("status", "note")
+        chip = (f'<span class="chip chip--{_RES_CHIP.get(status, "info")}">'
+                f'{_esc(_RES_LABEL.get(status, status.title()))}</span>')
+        who = resolution.get("by") or "reviewer"
+        at = resolution.get("at") or ""
+        note = resolution.get("note") or ""
+        body = f'{chip} by <b>{_esc(who)}</b> {_esc(at)}'
+        if note:
+            body += f' — {_esc(note)}'
+    else:
+        body = '<i>Not yet reviewed.</i>'
+    return (f'<div class="feed"><span>Resolution</span><div>{body}'
+            f'<div style="margin-top:7px">{actions_html}</div></div></div>')
+
+
+def recon_row_html(row: ReconRow, open_: bool = False,
+                   resolution: dict | None = None,
+                   actions_html: str = "") -> str:
     sev = _SEV_CLASS[row.severity]
     scale = max(row.built_qty, row.billed_qty, 1)
     built_pct = 100 * max(row.built_qty, 0) / scale
@@ -475,12 +521,20 @@ def recon_row_html(row: ReconRow, open_: bool = False) -> str:
     built_disp = _qty(row.built_qty) if row.built_qty else "—"
     uom_line = f"{row.uom.value}"
     co_tag = '<span class="co-tag">Change order</span>' if row.is_change_order else ""
+    res_tag = ""
+    if resolution:
+        st_ = resolution.get("status", "note")
+        res_tag = (f'<span class="co-tag" style="background:var(--canvas);'
+                   f'color:var(--muted)">{_esc(_RES_LABEL.get(st_, st_))}</span>')
+    detail = _feed_rows(row)
+    if actions_html or resolution:
+        detail += _resolution_feed(resolution, actions_html)
 
     return f"""<details class="rrow flag-{sev}"{' open' if open_ else ''}>
       <summary>
         <div class="rid">
           <span class="rid__code">{code}</span>
-          <div><div class="rid__desc">{_esc(row.description)}{co_tag}</div>
+          <div><div class="rid__desc">{_esc(row.description)}{co_tag}{res_tag}</div>
           <div class="rid__uom">{_esc(uom_line)}</div></div>
         </div>
         <div class="bars">
@@ -497,12 +551,74 @@ def recon_row_html(row: ReconRow, open_: bool = False) -> str:
           <span class="chip chip--{sev}">{_esc(_chip_label(row))}</span>
         </div>
       </summary>
-      <div class="rrow__detail">{_feed_rows(row)}</div>
+      <div class="rrow__detail">{detail}</div>
     </details>"""
 
 
-def recon_list_html(rows: list[ReconRow]) -> str:
-    return f'<div class="recon">{"".join(recon_row_html(r) for r in rows)}</div>'
+def recon_list_html(rows: list[ReconRow], resolutions: dict | None = None,
+                    actions_fn=None) -> str:
+    """Render the reconciliation rows. ``resolutions`` maps row key → decision;
+    ``actions_fn(row)`` returns the reviewer action links for that row."""
+    resolutions = resolutions or {}
+    parts = []
+    for r in rows:
+        key = r.code or r.description
+        parts.append(recon_row_html(
+            r, resolution=resolutions.get(key),
+            actions_html=actions_fn(r) if actions_fn else ""))
+    return f'<div class="recon">{"".join(parts)}</div>'
+
+
+def gates_html(gates, sid: str = "") -> str:
+    """Pre-export checklist: each gate with a pass/fail mark and a link to the step
+    that fixes it."""
+    rows = []
+    for g in gates:
+        mark = ("<span class='gate__mark gate__mark--ok'>✓</span>" if g.ok
+                else "<span class='gate__mark gate__mark--no'>!</span>")
+        fix = ""
+        if not g.ok:
+            fix = (f'<a class="btn btn--sm" href="?step={g.fix_step}&sid={sid}" '
+                   f'target="_self">Fix</a>')
+        rows.append(
+            f'<div class="gate">{mark}<div>'
+            f'<div class="gate__l">{_esc(g.label)}</div>'
+            f'<div class="gate__d">{_esc(g.detail)}</div></div>'
+            f'<div>{fix}</div></div>')
+    return '<div class="gates">' + "".join(rows) + '</div>'
+
+
+def trend_html(cycles: list[dict]) -> str:
+    """Built-to-date vs billed-to-date per saved cycle, drawn with the same dual-bar
+    language as the reconciliation rows. ``cycles`` are cycle_summary dicts."""
+    if not cycles:
+        return ""
+    scale = max([max(c.get("expected") or 0.0, c.get("billed") or 0.0)
+                 for c in cycles] + [1.0])
+    rows = []
+    for c in cycles:
+        built = c.get("expected") or 0.0
+        billed = c.get("billed") or 0.0
+        var = billed - built
+        var_cls = "up" if var > 0.5 else ("dn" if var < -0.5 else "ok")
+        rows.append(
+            '<div class="trow"><div>'
+            f'<div class="trow__k">Cycle {int(c["cycle_no"]):02d}</div>'
+            f'<div class="trow__s">{_esc(c.get("period_label") or "—")}</div></div>'
+            '<div class="bars">'
+            '<div class="bline"><span class="bline__k">Built</span>'
+            '<div class="btrack"><div class="bfill bfill--built" '
+            f'style="width:{100 * built / scale:.1f}%"></div></div>'
+            f'<span class="bline__v">${built:,.0f}</span></div>'
+            '<div class="bline"><span class="bline__k">Billed</span>'
+            '<div class="btrack"><div class="bfill bfill--billed" '
+            f'style="width:{100 * billed / scale:.1f}%"></div></div>'
+            f'<span class="bline__v">${billed:,.0f}</span></div>'
+            '</div>'
+            '<div class="rvar"><div class="rvar__l">Variance</div>'
+            f'<div class="rvar__v {var_cls}">{_money_signed(var)}</div></div>'
+            '</div>')
+    return '<div class="trend">' + "".join(rows) + '</div>'
 
 
 # --------------------------------------------------------------------------- #
@@ -557,15 +673,17 @@ def xw_card_html(raw: str, suggestion_html: str, confirm_href: str,
     """One crosswalk review card. Actions are query-param links (state persists
     across the reload, so this stays purely declarative HTML).
 
-    Emitted as a single blank-line-free string: a whitespace-only line (e.g. from
-    an omitted "Change" link) would read as a Markdown blank line and terminate the
-    HTML block, spilling every following card out as raw text.
+    Both a confirm action and a "Change" link (manual mapping) are always shown —
+    including for low-confidence / not-in-contract items — so any description can be
+    mapped to a unit by hand. Emitted as a single blank-line-free string so a
+    whitespace-only line can't read as a Markdown blank line and spill the HTML.
     """
-    actions = (f'<a class="btn btn--pri btn--sm" href="{confirm_href}" '
-               f'target="_self">{_esc(confirm_label)}</a>')
-    if not low:
-        actions += (f'<a class="btn btn--sm" href="{change_href}" '
-                    f'target="_self">Change</a>')
+    change_label = "Map manually" if low else "Change"
+    actions = (
+        f'<a class="btn btn--pri btn--sm" href="{confirm_href}" '
+        f'target="_self">{_esc(confirm_label)}</a>'
+        f'<a class="btn btn--sm" href="{change_href}" '
+        f'target="_self">{change_label}</a>')
     return (
         '<div class="xw"><div>'
         '<div class="xw__from">Source text</div>'

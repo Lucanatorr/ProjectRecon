@@ -21,10 +21,13 @@ class UoM(str, Enum):
         """Best-effort parse; returns None for unknown/blank input."""
         if raw is None:
             return None
+        # NOTE: keys must be written in normalized form — upper-case, no spaces —
+        # to match `key` below (e.g. "Per Foot" arrives here as "PERFOOT").
         key = str(raw).strip().upper().replace(" ", "")
         aliases = {
             "EA": cls.EA, "EACH": cls.EA, "E": cls.EA,
-            "FT": cls.FT, "F": cls.FT, "LF": cls.FT, "FOOT": cls.FT, "FEET": cls.FT, "Per Foot": cls.FT,
+            "FT": cls.FT, "F": cls.FT, "LF": cls.FT, "FOOT": cls.FT, "FEET": cls.FT,
+            "PERFOOT": cls.FT,
             "100FT": cls.C_FT, "C_FT": cls.C_FT, "CFT": cls.C_FT, "MFT": cls.C_FT,
             "LS": cls.LS, "LUMPSUM": cls.LS, "LUMP": cls.LS,
         }
@@ -121,6 +124,7 @@ class ReconRow:
     est_qty: float | None
     flags: list[Flag] = field(default_factory=list)
     is_change_order: bool = False       # authorized via a change order
+    prior_billed_qty: float | None = None   # this unit's billed-to-date last cycle
     # Contributing source-line references for drill-down / traceability.
     asbuilt_refs: list[str] = field(default_factory=list)
     invoice_refs: list[str] = field(default_factory=list)
@@ -135,6 +139,14 @@ class ReconRow:
         if self.contract_price is None:
             return 0.0
         return self.billed_price - self.contract_price
+
+    @property
+    def current_period_qty(self) -> float | None:
+        """This period's quantity = billed-to-date − prior cumulative (cumulative
+        pay apps). None when there is no prior cycle to compare against."""
+        if self.prior_billed_qty is None:
+            return None
+        return self.billed_qty - self.prior_billed_qty
 
     # --- derived money ---
     @property
