@@ -51,6 +51,12 @@ def _ingest(state: WizardState, paths, *, pdf_bytes=None, pdf_name="") -> None:
         f"Applied saved template for “{state.contractor}”."
         if profile and touched_pdf else "")
 
+    from ui.db import log_action
+    log_action("load_invoices", "invoice", actor=state.reviewer or None,
+               detail={"files": state.invoice_files, "lines": len(state.invoices),
+                       "billing_mode": state.billing_mode,
+                       "template_applied": bool(profile and touched_pdf)})
+
 
 def render(state: WizardState) -> None:
     st.markdown(lede(_LEDE), unsafe_allow_html=True)

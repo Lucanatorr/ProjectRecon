@@ -38,6 +38,13 @@ def test_normalize_uom():
     assert normalize_uom("widgets") is None
 
 
+def test_uom_aliases_are_written_in_normalized_form():
+    """from_str upper-cases and strips spaces before lookup, so a verbose alias
+    like "Per Foot" only works if its key is stored as "PERFOOT"."""
+    for variant in ("Per Foot", "per foot", "PER FOOT", "PerFoot", " per  foot "):
+        assert normalize_uom(variant) == UoM.FT, variant
+
+
 def test_uom_conversion():
     assert to_base_qty(3, UoM.C_FT) == 300      # 100FT -> FT
     assert to_base_qty(50, UoM.FT) == 50
