@@ -11,6 +11,7 @@ from __future__ import annotations
 import streamlit as st
 
 from ui import (
+    home,
     step_asbuilt,
     step_contract,
     step_crosswalk,
@@ -87,10 +88,35 @@ def render_sidebar(state, sid: str) -> None:
 def main() -> None:
     state = get_state()
     sid = get_sid()
-    if st.query_params.get("demo") and not state.contract:
-        load_demo(state)
-    current = _sync_step(state)
+    route = st.query_params.get("step", "")
 
+    # ?demo=1 loads the walkthrough and enters the wizard (unless a step is pinned)
+    if st.query_params.get("demo"):
+        if not state.contract:
+            load_demo(state)
+        if not route:
+            route = "contract"
+
+    # Home is the landing page: shown on first access (no ?step) and on ?step=home.
+    # Its sub-pages (new project, contractors, project detail, cycle drill-in)
+    # render their own Home-mode chrome.
+    if route == "project":
+        home.render_project(state)
+        return
+    if route == "new":
+        home.render_new_project(state)
+        return
+    if route == "contractors":
+        home.render_contractors(state)
+        return
+    if route == "cycle":
+        home.render_cycle(state)
+        return
+    if route in ("home", ""):
+        home.render_home(state)
+        return
+
+    current = _sync_step(state)
     render_sidebar(state, sid)
 
     st.markdown(topbar_html(state.project_name, _TITLES[current],

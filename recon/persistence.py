@@ -26,6 +26,21 @@ CREATE TABLE IF NOT EXISTS project (
   created_at    TEXT DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS contractor (
+  id            INTEGER PRIMARY KEY,
+  name          TEXT UNIQUE NOT NULL,
+  company       TEXT,
+  notes         TEXT,
+  created_at    TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS project_contractor (   -- projects have many contractors
+  project_id    INTEGER NOT NULL REFERENCES project(id),
+  contractor_id INTEGER NOT NULL REFERENCES contractor(id),
+  created_at    TEXT DEFAULT (datetime('now')),
+  PRIMARY KEY (project_id, contractor_id)
+);
+
 CREATE TABLE IF NOT EXISTS contract_item (
   id            INTEGER PRIMARY KEY,
   project_id    INTEGER NOT NULL REFERENCES project(id),
@@ -42,6 +57,7 @@ CREATE TABLE IF NOT EXISTS contract_item (
 CREATE TABLE IF NOT EXISTS billing_cycle (
   id            INTEGER PRIMARY KEY,
   project_id    INTEGER NOT NULL REFERENCES project(id),
+  contractor_id INTEGER REFERENCES contractor(id),  -- which contractor this cycle bills
   cycle_no      INTEGER NOT NULL,
   period_label  TEXT,
   billing_mode  TEXT CHECK(billing_mode IN ('cumulative','discrete')),
@@ -149,6 +165,7 @@ class Database:
     # to a database created by an earlier version, so top them up here.
     _ADDED_COLUMNS = {
         "recon_result": {"resolution_note": "TEXT"},
+        "billing_cycle": {"contractor_id": "INTEGER REFERENCES contractor(id)"},
     }
 
     def _migrate(self) -> None:
@@ -194,10 +211,72 @@ class Database:
             "SELECT * FROM project WHERE name=? ORDER BY id DESC LIMIT 1",
             (name,)).fetchone()
 
+    def project_by_id(self, project_id: int) -> sqlite3.Row | None:
+        return self._conn.execute(
+            "SELECT * FROM project WHERE id=?", (project_id,)).fetchone()
+
     def get_or_create_project(self, name: str, contractor: str | None = None,
                              area: str | None = None) -> int:
         row = self.project_by_name(name)
         return row["id"] if row else self.create_project(name, contractor, area)
+
+    def project_stats(self) -> list[dict]:
+        """Portfolio rows for the Home page: each project with its contractor names,
+        cycle count, latest period, billed-to-date, and open flagged $."""
+        projects = self.list_projects()
+        out: list[dict] = []
+        for p in projects:
+            pid = p["id"]
+            cons = [c["name"] for c in self.project_contractors(pid)]
+            summaries = self.cycle_summaries(pid)
+            billed = sum(s["billed"] for s in summaries)
+            built = sum(s["expected"] for s in summaries)
+            flagged = sum(s["flagged"] for s in summaries)
+            latest = summaries[-1] if summaries else None
+            out.append({
+                "id": pid, "name": p["name"], "area": p["area"],
+                "status": p["status"] or "active", "contractors": cons,
+                "n_cycles": len(summaries), "built": built, "billed": billed,
+                "flagged": flagged,
+                "latest_period": latest["period_label"] if latest else None,
+                "created_at": p["created_at"],
+            })
+        return out
+
+    # --- contractors ---
+    def create_contractor(self, name: str, company: str | None = None,
+                         notes: str | None = None) -> int:
+        with self.tx() as cur:
+            cur.execute(
+                "INSERT INTO contractor(name, company, notes) VALUES (?,?,?)",
+                (name, company, notes))
+            return cur.lastrowid
+
+    def contractor_by_name(self, name: str) -> sqlite3.Row | None:
+        return self._conn.execute(
+            "SELECT * FROM contractor WHERE name=?", (name,)).fetchone()
+
+    def get_or_create_contractor(self, name: str, company: str | None = None,
+                                notes: str | None = None) -> int:
+        row = self.contractor_by_name(name)
+        return row["id"] if row else self.create_contractor(name, company, notes)
+
+    def list_contractors(self) -> list[sqlite3.Row]:
+        return self._conn.execute(
+            "SELECT * FROM contractor ORDER BY name").fetchall()
+
+    def link_contractor(self, project_id: int, contractor_id: int) -> None:
+        """Attach a contractor to a project (no-op if already linked)."""
+        with self.tx() as cur:
+            cur.execute(
+                """INSERT OR IGNORE INTO project_contractor(project_id, contractor_id)
+                   VALUES (?,?)""", (project_id, contractor_id))
+
+    def project_contractors(self, project_id: int) -> list[sqlite3.Row]:
+        return self._conn.execute(
+            """SELECT c.* FROM contractor c
+               JOIN project_contractor pc ON pc.contractor_id = c.id
+               WHERE pc.project_id=? ORDER BY c.name""", (project_id,)).fetchall()
 
     # --- contract items ---
     def save_contract(self, project_id: int, items: list[ContractItem]) -> None:
@@ -231,37 +310,50 @@ class Database:
     # --- billing cycles ---
     def create_cycle(self, project_id: int, cycle_no: int, *, period_label: str | None,
                     billing_mode: str, retainage_pct: float,
-                    prior_billed_to_date: float = 0.0) -> int:
+                    prior_billed_to_date: float = 0.0,
+                    contractor_id: int | None = None) -> int:
         with self.tx() as cur:
             cur.execute(
                 """INSERT INTO billing_cycle
-                   (project_id, cycle_no, period_label, billing_mode,
+                   (project_id, contractor_id, cycle_no, period_label, billing_mode,
                     retainage_pct, prior_billed_to_date)
-                   VALUES (?,?,?,?,?,?)""",
-                (project_id, cycle_no, period_label, billing_mode,
+                   VALUES (?,?,?,?,?,?,?)""",
+                (project_id, contractor_id, cycle_no, period_label, billing_mode,
                  retainage_pct, prior_billed_to_date),
             )
             return cur.lastrowid
 
-    def list_cycles(self, project_id: int) -> list[sqlite3.Row]:
+    def list_cycles(self, project_id: int,
+                   contractor_id: int | None = None) -> list[sqlite3.Row]:
+        """Cycles for a project, oldest first. With ``contractor_id`` set, only that
+        contractor's cycles; otherwise every cycle on the project."""
+        if contractor_id is None:
+            return self._conn.execute(
+                "SELECT * FROM billing_cycle WHERE project_id=? ORDER BY cycle_no",
+                (project_id,)).fetchall()
         return self._conn.execute(
-            "SELECT * FROM billing_cycle WHERE project_id=? ORDER BY cycle_no",
-            (project_id,)).fetchall()
+            """SELECT * FROM billing_cycle WHERE project_id=? AND contractor_id=?
+               ORDER BY cycle_no""", (project_id, contractor_id)).fetchall()
 
     def get_or_create_cycle(self, project_id: int, cycle_no: int, *,
                            period_label: str | None, billing_mode: str,
                            retainage_pct: float,
-                           prior_billed_to_date: float = 0.0) -> int:
-        """Return the cycle id for (project, cycle_no), updating its metadata if it
-        already exists so re-saving a cycle overwrites rather than duplicates."""
+                           prior_billed_to_date: float = 0.0,
+                           contractor_id: int | None = None) -> int:
+        """Return the cycle id for (project, contractor, cycle_no), updating its
+        metadata if it already exists so re-saving a cycle overwrites rather than
+        duplicates. ``contractor_id IS ?`` is NULL-safe, so legacy no-contractor
+        cycles still match."""
         row = self._conn.execute(
-            "SELECT id FROM billing_cycle WHERE project_id=? AND cycle_no=?",
-            (project_id, cycle_no)).fetchone()
+            """SELECT id FROM billing_cycle
+               WHERE project_id=? AND cycle_no=? AND contractor_id IS ?""",
+            (project_id, cycle_no, contractor_id)).fetchone()
         if row is None:
             return self.create_cycle(
                 project_id, cycle_no, period_label=period_label,
                 billing_mode=billing_mode, retainage_pct=retainage_pct,
-                prior_billed_to_date=prior_billed_to_date)
+                prior_billed_to_date=prior_billed_to_date,
+                contractor_id=contractor_id)
         with self.tx() as cur:
             cur.execute(
                 """UPDATE billing_cycle SET period_label=?, billing_mode=?,
@@ -378,7 +470,9 @@ class Database:
     def cycle_summary(self, cycle_id: int) -> dict:
         """Headline numbers for a saved cycle, recomputed from its stored results."""
         bc = self._conn.execute(
-            "SELECT * FROM billing_cycle WHERE id=?", (cycle_id,)).fetchone()
+            """SELECT bc.*, c.name AS contractor_name FROM billing_cycle bc
+               LEFT JOIN contractor c ON c.id = bc.contractor_id
+               WHERE bc.id=?""", (cycle_id,)).fetchone()
         rows = self.load_results(cycle_id)
         billed = sum((r["billed_amount"] or 0) for r in rows)
         expected = sum((r["expected_amount"] or 0) for r in rows)
@@ -390,22 +484,44 @@ class Database:
         return {
             "cycle_id": cycle_id, "cycle_no": bc["cycle_no"],
             "period_label": bc["period_label"], "billing_mode": bc["billing_mode"],
+            "contractor_id": bc["contractor_id"], "contractor": bc["contractor_name"],
             "billed": billed, "expected": expected, "flagged": flagged,
             "n_critical": n_crit, "retainage": retainage,
             "net": billed - flagged - retainage, "n_units": len(rows),
             "created_at": bc["created_at"],
         }
 
-    def cycle_summaries(self, project_id: int) -> list[dict]:
-        return [self.cycle_summary(c["id"]) for c in self.list_cycles(project_id)]
+    def cycle_summaries(self, project_id: int,
+                       contractor_id: int | None = None) -> list[dict]:
+        return [self.cycle_summary(c["id"])
+                for c in self.list_cycles(project_id, contractor_id)]
 
-    def prior_billed_by_code(self, project_id: int, before_cycle_no: int) -> dict[str, float]:
+    def get_cycle(self, cycle_id: int) -> sqlite3.Row | None:
+        """A saved cycle's full row, joined to its project and contractor names —
+        the header for the read-only drill-in."""
+        return self._conn.execute(
+            """SELECT bc.*, p.name AS project_name, c.name AS contractor_name
+               FROM billing_cycle bc
+               JOIN project p ON p.id = bc.project_id
+               LEFT JOIN contractor c ON c.id = bc.contractor_id
+               WHERE bc.id=?""", (cycle_id,)).fetchone()
+
+    def prior_billed_by_code(self, project_id: int, before_cycle_no: int,
+                            contractor_id: int | None = None) -> dict[str, float]:
         """Per-unit billed-to-date from the most recent saved cycle before
-        ``before_cycle_no`` — the prior cumulative for the current-vs-prior check."""
-        row = self._conn.execute(
-            """SELECT id FROM billing_cycle WHERE project_id=? AND cycle_no < ?
-               ORDER BY cycle_no DESC LIMIT 1""",
-            (project_id, before_cycle_no)).fetchone()
+        ``before_cycle_no`` — the prior cumulative for the current-vs-prior check.
+        With ``contractor_id`` set, only that contractor's prior cycles count."""
+        if contractor_id is None:
+            row = self._conn.execute(
+                """SELECT id FROM billing_cycle WHERE project_id=? AND cycle_no < ?
+                   ORDER BY cycle_no DESC LIMIT 1""",
+                (project_id, before_cycle_no)).fetchone()
+        else:
+            row = self._conn.execute(
+                """SELECT id FROM billing_cycle
+                   WHERE project_id=? AND contractor_id=? AND cycle_no < ?
+                   ORDER BY cycle_no DESC LIMIT 1""",
+                (project_id, contractor_id, before_cycle_no)).fetchone()
         if row is None:
             return {}
         return {r["code"]: (r["billed_qty"] or 0.0)
@@ -417,30 +533,51 @@ class Database:
                            prior_billed: float, contract_items: list[ContractItem],
                            rows: list[ReconRow], actor: str | None = None,
                            resolutions: dict | None = None) -> tuple[int, int]:
-        """Persist a finalized cycle: project + contract + cycle metadata + results.
-        Idempotent per (project, cycle_no) — re-saving overwrites."""
+        """Persist a finalized cycle: project + contractor + contract + cycle
+        metadata + results. Idempotent per (project, contractor, cycle_no) —
+        re-saving overwrites. A named contractor is registered and linked to the
+        project so it shows on the Home page and its cycles stay separable."""
         pid = self.get_or_create_project(project_name, contractor, area)
+        contractor_id: int | None = None
+        if contractor:
+            contractor_id = self.get_or_create_contractor(contractor)
+            self.link_contractor(pid, contractor_id)
         self.save_contract(pid, contract_items)
         cid = self.get_or_create_cycle(
             pid, cycle_no, period_label=period_label, billing_mode=billing_mode,
-            retainage_pct=retainage_pct, prior_billed_to_date=prior_billed)
+            retainage_pct=retainage_pct, prior_billed_to_date=prior_billed,
+            contractor_id=contractor_id)
         self.save_results(cid, rows, resolutions)
         self.log(actor, "save_cycle", "billing_cycle", cid,
-                 {"project": project_name, "cycle_no": cycle_no, "n_units": len(rows),
+                 {"project": project_name, "contractor": contractor,
+                  "cycle_no": cycle_no, "n_units": len(rows),
                   "n_resolved": len(resolutions or {})})
         return pid, cid
 
-    def trend(self, project_id: int) -> list[dict]:
-        """Built-to-date vs billed-to-date per cycle for the trend view."""
-        rows = self._conn.execute(
-            """SELECT bc.cycle_no, bc.period_label,
-                      SUM(rr.expected_amount) AS built_value,
-                      SUM(rr.billed_amount)   AS billed_value
-               FROM billing_cycle bc
-               LEFT JOIN recon_result rr ON rr.cycle_id = bc.id
-               WHERE bc.project_id=?
-               GROUP BY bc.id ORDER BY bc.cycle_no""",
-            (project_id,)).fetchall()
+    def trend(self, project_id: int,
+             contractor_id: int | None = None) -> list[dict]:
+        """Built-to-date vs billed-to-date per cycle for the trend view. With
+        ``contractor_id`` set, only that contractor's cycles."""
+        if contractor_id is None:
+            rows = self._conn.execute(
+                """SELECT bc.cycle_no, bc.period_label,
+                          SUM(rr.expected_amount) AS built_value,
+                          SUM(rr.billed_amount)   AS billed_value
+                   FROM billing_cycle bc
+                   LEFT JOIN recon_result rr ON rr.cycle_id = bc.id
+                   WHERE bc.project_id=?
+                   GROUP BY bc.id ORDER BY bc.cycle_no""",
+                (project_id,)).fetchall()
+        else:
+            rows = self._conn.execute(
+                """SELECT bc.cycle_no, bc.period_label,
+                          SUM(rr.expected_amount) AS built_value,
+                          SUM(rr.billed_amount)   AS billed_value
+                   FROM billing_cycle bc
+                   LEFT JOIN recon_result rr ON rr.cycle_id = bc.id
+                   WHERE bc.project_id=? AND bc.contractor_id=?
+                   GROUP BY bc.id ORDER BY bc.cycle_no""",
+                (project_id, contractor_id)).fetchall()
         return [dict(r) for r in rows]
 
     # --- audit ---
