@@ -69,7 +69,8 @@ def ensure_results(state: WizardState) -> None:
     # load the prior cycle's per-unit billed-to-date (cumulative current-vs-prior)
     from ui.db import prior_billed as _load_prior
     state.prior_billed_by_code = (
-        _load_prior(state.project_name, int(state.cycle_no))
+        _load_prior(state.project_name, int(state.cycle_no),
+                    state.contractor or None)
         if state.billing_mode == "cumulative" else {})
     if not state.results or state.results_fp != inputs_fingerprint(state):
         run_reconciliation(state)

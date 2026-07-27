@@ -72,7 +72,8 @@ html, body, [data-testid="stApp"], [data-testid="stAppViewContainer"], [data-tes
 [data-testid="stSidebar"] .stMarkdown{width:100%;}
 
 .side__brand{padding:20px 20px 16px;border-bottom:1px solid var(--ink-line);}
-.side__logo{display:flex;align-items:center;gap:10px;}
+.side__logo{display:flex;align-items:center;gap:10px;text-decoration:none;}
+[data-testid="stMarkdown"] a.side__logo{text-decoration:none !important;}
 .side__mark{width:26px;height:26px;border-radius:6px;background:var(--blue);display:grid;place-items:center;flex:none;}
 .side__mark span{width:11px;height:11px;border:2.5px solid #fff;border-radius:50%;display:block;}
 .side__name{color:#fff;font-weight:600;font-size:14px;letter-spacing:.2px;}
@@ -311,6 +312,65 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px;}
 }
 
 .stAlert{border-radius:9px;}
+
+/* ---------- home / landing ---------- */
+.hnav{display:flex;flex-direction:column;gap:2px;padding:14px 12px 6px;}
+.hnav a{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:9px;font-size:13.5px;font-weight:500;color:#c3ccdb;text-decoration:none;transition:background .15s;}
+.hnav a:hover{background:var(--ink-2);}
+.hnav a.on{background:var(--ink-2);color:#fff;}
+.hnav a .ct{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--muted-2);background:#0b111d;border:1px solid var(--ink-line);border-radius:20px;padding:1px 8px;}
+.recent{padding:8px 24px 14px;}
+.recent__l{font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted-2);padding-bottom:4px;}
+.recent a{display:block;padding:7px 0;font-size:12.5px;color:#aeb9cc;text-decoration:none;}
+.recent a:hover{color:#fff;}
+.recent a small{display:block;color:var(--muted-2);font-size:11px;margin-top:1px;}
+
+.pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px;}
+.pcard{display:flex;flex-direction:column;gap:13px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:17px 18px;text-decoration:none;color:inherit;transition:border-color .15s,transform .15s,box-shadow .15s;}
+.pcard:hover{border-color:var(--blue);transform:translateY(-2px);box-shadow:0 8px 22px rgba(16,24,38,.08);}
+.pcard__head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;}
+.pcard__name{font-size:15px;font-weight:600;color:var(--text);}
+.pcard__meta{font-size:11.5px;color:var(--muted);margin-top:3px;}
+.pcard__cons{display:flex;gap:6px;flex-wrap:wrap;}
+.con{display:inline-block;font-size:11.5px;font-weight:500;color:var(--muted);background:var(--canvas);border:1px solid var(--line);border-radius:7px;padding:2px 9px;}
+.pstats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;}
+.pstat__l{font-size:10px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted-2);}
+.pstat__v{font-family:var(--mono);font-size:15px;font-weight:600;margin-top:3px;letter-spacing:-.3px;color:var(--text);}
+.pstat__v.crit{color:var(--critical);}
+.pstat__v.ok{color:var(--ok);}
+.pcard__foot{display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--line-soft);padding-top:11px;}
+.pcard__last{font-size:11.5px;color:var(--muted-2);}
+.pcard__open{font-size:12.5px;font-weight:600;color:var(--blue);}
+.bfill--over{background:var(--critical);}
+
+.pchip{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:3px 9px;border-radius:20px;white-space:nowrap;}
+.pchip::before{content:"";width:6px;height:6px;border-radius:50%;}
+.pchip--ok{background:var(--ok-soft);color:var(--ok);}
+.pchip--ok::before{background:var(--ok);}
+.pchip--warn{background:var(--warn-soft);color:var(--warn);}
+.pchip--warn::before{background:var(--warn);}
+.pchip--muted{background:var(--line-soft);color:var(--muted);}
+.pchip--muted::before{background:var(--muted-2);}
+.tbl a.plink{color:var(--text);font-weight:600;text-decoration:none;}
+.tbl a.plink:hover{color:var(--blue);}
+
+.empty{background:var(--surface);border:1px dashed var(--line);border-radius:var(--r);padding:44px 28px;text-align:center;}
+.empty__t{font-size:16px;font-weight:600;color:var(--text);}
+.empty__d{font-size:13px;color:var(--muted);margin:8px auto 18px;max-width:46ch;}
+
+/* keep Streamlit's link styling off the home components */
+[data-testid="stMarkdown"] a.pcard,
+[data-testid="stMarkdown"] .hnav a,
+[data-testid="stMarkdown"] .recent a,
+[data-testid="stMarkdown"] a.plink{text-decoration:none !important;}
+[data-testid="stMarkdown"] a.pcard{color:inherit !important;}
+[data-testid="stMarkdown"] .hnav a{color:#c3ccdb !important;}
+[data-testid="stMarkdown"] .hnav a.on{color:#fff !important;}
+[data-testid="stMarkdown"] .recent a{color:#aeb9cc !important;}
+[data-testid="stMarkdown"] .recent a:hover{color:#fff !important;}
+[data-testid="stMarkdown"] a.plink{color:var(--text) !important;}
+[data-testid="stMarkdown"] a.plink:hover{color:var(--blue) !important;}
+
 @media (prefers-reduced-motion:reduce){*{animation:none !important;transition:none !important;}}
 </style>
 """
@@ -365,13 +425,13 @@ def sidebar_html(steps_state: list[dict], project_name: str, meta: str,
         )
     return f"""
     <div class="side__brand">
-      <div class="side__logo">
+      <a class="side__logo" href="?step=home{q}" target="_self" title="All projects">
         <div class="side__mark"><span></span></div>
         <div>
           <div class="side__name">Project Recon</div>
           <div class="side__sub">Reconciliation Tool</div>
         </div>
-      </div>
+      </a>
       <div class="side__ribbon" title="Fiber color code">{ribbon}</div>
     </div>
     <nav class="steps">{''.join(step_items)}</nav>
@@ -702,4 +762,179 @@ def xw_resolved_html(raw: str, target_html: str, change_href: str) -> str:
         f'<a class="btn btn--sm" href="{change_href}" target="_self">Change</a>'
         '</div></div>'
     )
+
+
+# --------------------------------------------------------------------------- #
+#  home / landing
+# --------------------------------------------------------------------------- #
+def _money_compact(v: float) -> str:
+    v = v or 0.0
+    if abs(v) >= 1e6:
+        return f"${v / 1e6:.2f}M"
+    if abs(v) >= 1e3:
+        return f"${v / 1e3:.1f}k"
+    return f"${v:,.0f}"
+
+
+_STATUS_CHIP = {"active": "ok", "closeout": "warn", "archived": "muted",
+                "closed": "muted"}
+
+
+def project_status_chip(status: str | None) -> str:
+    label = (status or "active").title()
+    cls = _STATUS_CHIP.get((status or "active").lower(), "ok")
+    return f'<span class="pchip pchip--{cls}">{_esc(label)}</span>'
+
+
+def sidebar_home_html(n_projects: int, n_contractors: int, n_cycles: int,
+                      recents: list[dict], sid: str = "",
+                      active: str = "projects") -> str:
+    """Home-mode sidebar: brand, Projects / Contractors nav, and a recent list.
+    ``recents`` are {name, meta, href}; ``active`` in {'projects','contractors'}."""
+    q = f"&sid={sid}" if sid else ""
+    ribbon = "".join(f'<i style="background:{c}"></i>' for c in _FIBER)
+    projects_nav = (f'<a class="{"on" if active == "projects" else ""}" '
+                    f'href="?step=home{q}" target="_self">Projects'
+                    f'<span class="ct">{n_projects}</span></a>')
+    contractors_nav = (f'<a class="{"on" if active == "contractors" else ""}" '
+                       f'href="?step=contractors{q}" target="_self">Contractors'
+                       f'<span class="ct">{n_contractors}</span></a>')
+    rec_items = "".join(
+        f'<a href="{r["href"]}" target="_self">{_esc(r["name"])}'
+        f'<small>{_esc(r["meta"])}</small></a>' for r in recents)
+    recent_block = (f'<div class="recent"><div class="recent__l">Recent</div>'
+                    f'{rec_items}</div>' if recents else "")
+    plural_p = "" if n_projects == 1 else "s"
+    plural_c = "" if n_cycles == 1 else "s"
+    return f"""
+    <div class="side__brand">
+      <div class="side__logo">
+        <div class="side__mark"><span></span></div>
+        <div>
+          <div class="side__name">Project Recon</div>
+          <div class="side__sub">Reconciliation Tool</div>
+        </div>
+      </div>
+      <div class="side__ribbon" title="Fiber color code">{ribbon}</div>
+    </div>
+    <nav class="hnav">{projects_nav}{contractors_nav}</nav>{recent_block}
+    <div class="side__foot">
+      <div class="proj">Portfolio</div>
+      <div class="proj__name">{n_projects} project{plural_p}</div>
+      <div class="proj__meta">{n_cycles} cycle{plural_c} reconciled</div>
+    </div>
+    """
+
+
+def home_topbar_html(view: str, sid: str = "", new_href: str = "#") -> str:
+    """Home top bar: Home / Projects crumb, a Cards⇄Table toggle (?hv=), and the
+    New project button."""
+    q = f"&sid={sid}" if sid else ""
+
+    def chip(key: str, label: str) -> str:
+        on = " is-on" if view == key else ""
+        return (f'<a class="fchip{on}" href="?step=home&hv={key}{q}" '
+                f'target="_self">{label}</a>')
+
+    toggle = f'<div class="filters">{chip("cards", "Cards")}{chip("table", "Table")}</div>'
+    new = f'<a class="btn btn--pri" href="{new_href}" target="_self">+ New project</a>'
+    return f"""
+    <div class="top">
+      <div>
+        <div class="top__crumb">Home</div>
+        <div class="top__title">Projects</div>
+      </div>
+      <div class="top__actions" style="align-items:center">{toggle}{new}</div>
+    </div>
+    """
+
+
+def project_topbar_html(name: str, sid: str = "", actions_html: str = "") -> str:
+    q = f"&sid={sid}" if sid else ""
+    back = f'<a class="btn" href="?step=home{q}" target="_self">← All projects</a>'
+    return f"""
+    <div class="top">
+      <div>
+        <div class="top__crumb">Home &nbsp;›&nbsp; {_esc(name)}</div>
+        <div class="top__title">{_esc(name)}</div>
+      </div>
+      <div class="top__actions">{back}{actions_html}</div>
+    </div>
+    """
+
+
+def _project_card(p: dict, sid: str = "") -> str:
+    q = f"&sid={sid}" if sid else ""
+    href = f"?step=project&pid={p['id']}{q}"
+    cons = "".join(f'<span class="con">{_esc(c)}</span>' for c in p["contractors"]) \
+        or '<span class="con" style="color:var(--muted-2)">No contractor yet</span>'
+    built = p.get("built") or 0.0
+    billed = p.get("billed") or 0.0
+    flagged = p.get("flagged") or 0.0
+    scale = max(built, billed, 1.0)
+    over = flagged > 0.5
+    billed_cls = "bfill--over" if over else "bfill--billed"
+    flag_cls = "crit" if over else "ok"
+    n = p["n_cycles"]
+    latest = p.get("latest_period") or "—"
+    return (
+        f'<a class="pcard" href="{href}" target="_self">'
+        '<div class="pcard__head"><div>'
+        f'<div class="pcard__name">{_esc(p["name"])}</div>'
+        f'<div class="pcard__meta">{_esc(p.get("area") or "—")} · '
+        f'{n} cycle{"" if n == 1 else "s"}</div>'
+        f'</div>{project_status_chip(p["status"])}</div>'
+        f'<div class="pcard__cons">{cons}</div>'
+        '<div class="pstats">'
+        f'<div><div class="pstat__l">Cycles</div><div class="pstat__v">{n}</div></div>'
+        '<div><div class="pstat__l">Billed to date</div>'
+        f'<div class="pstat__v">{_money_compact(billed)}</div></div>'
+        f'<div><div class="pstat__l">Flagged</div>'
+        f'<div class="pstat__v {flag_cls}">${flagged:,.0f}</div></div>'
+        '</div>'
+        '<div class="bars">'
+        '<div class="bline"><span class="bline__k">Built</span>'
+        f'<div class="btrack"><div class="bfill bfill--built" '
+        f'style="width:{100 * built / scale:.1f}%"></div></div>'
+        f'<span class="bline__v">${built:,.0f}</span></div>'
+        '<div class="bline"><span class="bline__k">Billed</span>'
+        f'<div class="btrack"><div class="bfill {billed_cls}" '
+        f'style="width:{100 * billed / scale:.1f}%"></div></div>'
+        f'<span class="bline__v">${billed:,.0f}</span></div>'
+        '</div>'
+        f'<div class="pcard__foot"><span class="pcard__last">Latest · {_esc(latest)}</span>'
+        '<span class="pcard__open">Open project →</span></div>'
+        '</a>')
+
+
+def home_cards_html(projects: list[dict], sid: str = "") -> str:
+    return ('<div class="pgrid">'
+            + "".join(_project_card(p, sid) for p in projects) + '</div>')
+
+
+def home_table_html(projects: list[dict], sid: str = "") -> str:
+    q = f"&sid={sid}" if sid else ""
+    headers = [("Project", ""), ("Contractors", ""), ("Cycles", "r"),
+               ("Latest", ""), ("Billed to date", "r"), ("Flagged", "r"),
+               ("Status", "")]
+    body = []
+    for p in projects:
+        href = f"?step=project&pid={p['id']}{q}"
+        cons = "".join(f'<span class="con">{_esc(c)}</span>'
+                       for c in p["contractors"]) or "—"
+        flagged = p.get("flagged") or 0.0
+        flag_td = (f'<td class="r num" style="color:var(--critical)">'
+                   f'${flagged:,.0f}</td>' if flagged > 0.5
+                   else '<td class="r num">$0</td>')
+        body.append([
+            f'<td><a class="plink" href="{href}" target="_self">{_esc(p["name"])}</a>'
+            f'<div class="pcard__meta">{_esc(p.get("area") or "")}</div></td>',
+            f'<td><div style="display:flex;gap:5px;flex-wrap:wrap">{cons}</div></td>',
+            td(p["n_cycles"], "r num"),
+            td(p.get("latest_period") or "—"),
+            td(f'${(p.get("billed") or 0):,.0f}', "r num"),
+            flag_td,
+            f'<td>{project_status_chip(p["status"])}</td>',
+        ])
+    return table_html(headers, body)
 

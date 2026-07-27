@@ -98,6 +98,22 @@ def get_state() -> WizardState:
     return store[sid]
 
 
+def new_session(**overrides) -> str:
+    """Mint a fresh wizard session (its own sid + WizardState), apply field
+    overrides, seed the crosswalk, and store it. Home uses this to start a new
+    project or the next cycle without disturbing the caller's session."""
+    import uuid
+    store = _state_store()
+    sid = uuid.uuid4().hex[:12]
+    ws = WizardState()
+    from ui.db import load_aliases
+    ws.aliases = load_aliases()
+    for key, value in overrides.items():
+        setattr(ws, key, value)
+    store[sid] = ws
+    return sid
+
+
 def load_demo(state: WizardState) -> None:
     """Populate the whole Robeson CAB — PON 5 demo (contract, as-built, invoices,
     confirmed crosswalk) in one shot. Triggered by ?demo=1 for quick walkthroughs."""
