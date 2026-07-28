@@ -144,6 +144,14 @@ CREATE TABLE IF NOT EXISTS template_profile (   -- per-contractor PDF invoice la
   columns_json  TEXT NOT NULL,
   updated_at    TEXT DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS feature_code_map (   -- per-project geo feature_type -> code
+  project_id    INTEGER NOT NULL REFERENCES project(id),
+  feature_type  TEXT NOT NULL,
+  code          TEXT NOT NULL,
+  updated_at    TEXT DEFAULT (datetime('now')),
+  PRIMARY KEY (project_id, feature_type)
+);
 """
 
 
@@ -495,6 +503,29 @@ class Database:
                        contractor_id: int | None = None) -> list[dict]:
         return [self.cycle_summary(c["id"])
                 for c in self.list_cycles(project_id, contractor_id)]
+
+    # --- geo feature-type crosswalk (per project) ---
+    def feature_code_map(self, project_id: int) -> dict[str, str]:
+        """This project's feature_type → contract-code overrides."""
+        return {r["feature_type"]: r["code"] for r in self._conn.execute(
+            "SELECT feature_type, code FROM feature_code_map WHERE project_id=?",
+            (project_id,))}
+
+    def set_feature_code(self, project_id: int, feature_type: str,
+                        code: str) -> None:
+        with self.tx() as cur:
+            cur.execute(
+                """INSERT INTO feature_code_map(project_id, feature_type, code)
+                   VALUES (?,?,?)
+                   ON CONFLICT(project_id, feature_type)
+                   DO UPDATE SET code=excluded.code, updated_at=datetime('now')""",
+                (project_id, feature_type, code))
+
+    def delete_feature_code(self, project_id: int, feature_type: str) -> None:
+        with self.tx() as cur:
+            cur.execute(
+                "DELETE FROM feature_code_map WHERE project_id=? AND feature_type=?",
+                (project_id, feature_type))
 
     def get_cycle(self, cycle_id: int) -> sqlite3.Row | None:
         """A saved cycle's full row, joined to its project and contractor names —

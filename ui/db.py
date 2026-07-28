@@ -176,6 +176,35 @@ def load_saved_contract(project_id: int):
         db.close()
 
 
+def feature_code_overrides(project_name: str) -> dict[str, str]:
+    """A project's saved feature_type → code overrides ({} if unsaved/none)."""
+    if not project_name:
+        return {}
+    db = Database()
+    try:
+        p = db.project_by_name(project_name)
+        return db.feature_code_map(p["id"]) if p else {}
+    finally:
+        db.close()
+
+
+def set_feature_code(project_name: str, feature_type: str, code: str) -> bool:
+    """Persist a feature_type → code override for a project. Returns False (and
+    persists nothing) when the project isn't saved yet — the caller keeps the edit
+    in session until the project exists."""
+    if not (project_name and feature_type and code):
+        return False
+    db = Database()
+    try:
+        p = db.project_by_name(project_name)
+        if not p:
+            return False
+        db.set_feature_code(p["id"], feature_type, code)
+        return True
+    finally:
+        db.close()
+
+
 def cycle_detail(cycle_id: int) -> dict | None:
     """Rebuild a saved cycle's full reconciliation (rows + reviewer decisions) for
     the read-only drill-in. Source-file feeds aren't persisted, so those stay empty;

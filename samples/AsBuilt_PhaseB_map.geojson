@@ -1,0 +1,29 @@
+{
+  "type": "FeatureCollection",
+  "crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:EPSG::4326" } },
+  "features": [
+    { "type": "Feature", "properties": { "feature_type": "aerial_cable", "local_id": "AER-01", "captured_by": "Rivr Tech", "source": "field-pwa" },
+      "geometry": { "type": "LineString", "coordinates": [[-79.0180,34.6118],[-79.0150,34.6118],[-79.0120,34.6118],[-79.0090,34.6118]] } },
+    { "type": "Feature", "properties": { "feature_type": "buried_cable", "local_id": "BUR-01", "captured_by": "Rivr Tech", "source": "field-pwa" },
+      "geometry": { "type": "LineString", "coordinates": [[-79.0135,34.6135],[-79.0135,34.6118],[-79.0135,34.6095],[-79.0135,34.6072]] } },
+    { "type": "Feature", "properties": { "feature_type": "conduit_bore", "local_id": "BORE-01", "attrs": { "diameter_in": 2 }, "source": "field-pwa" },
+      "geometry": { "type": "LineString", "coordinates": [[-79.0135,34.6118],[-79.0135,34.6115]] } },
+    { "type": "Feature", "properties": { "feature_type": "handhole", "local_id": "HH-011", "attrs": { "size": "30x48" } }, "geometry": { "type": "Point", "coordinates": [-79.0135,34.6135] } },
+    { "type": "Feature", "properties": { "feature_type": "handhole", "local_id": "HH-012", "attrs": { "size": "30x48" } }, "geometry": { "type": "Point", "coordinates": [-79.0135,34.6118] } },
+    { "type": "Feature", "properties": { "feature_type": "handhole", "local_id": "HH-013", "attrs": { "size": "24x36" } }, "geometry": { "type": "Point", "coordinates": [-79.0135,34.6095] } },
+    { "type": "Feature", "properties": { "feature_type": "handhole", "local_id": "HH-014", "attrs": { "size": "30x48" } }, "geometry": { "type": "Point", "coordinates": [-79.0135,34.6072] } },
+    { "type": "Feature", "properties": { "feature_type": "handhole", "local_id": "HH-015", "attrs": { "size": "30x48" } }, "geometry": { "type": "Point", "coordinates": [-79.0120,34.6118] } },
+    { "type": "Feature", "properties": { "feature_type": "handhole", "local_id": "HH-016", "attrs": { "size": "24x36" } }, "geometry": { "type": "Point", "coordinates": [-79.0090,34.6118] } },
+    { "type": "Feature", "properties": { "feature_type": "pole", "local_id": "PL-01" }, "geometry": { "type": "Point", "coordinates": [-79.0180,34.6118] } },
+    { "type": "Feature", "properties": { "feature_type": "pole", "local_id": "PL-02" }, "geometry": { "type": "Point", "coordinates": [-79.0165,34.6118] } },
+    { "type": "Feature", "properties": { "feature_type": "pole", "local_id": "PL-03" }, "geometry": { "type": "Point", "coordinates": [-79.0150,34.6118] } },
+    { "type": "Feature", "properties": { "feature_type": "pole", "local_id": "PL-04" }, "geometry": { "type": "Point", "coordinates": [-79.0105,34.6118] } },
+    { "type": "Feature", "properties": { "feature_type": "pole", "local_id": "PL-05" }, "geometry": { "type": "Point", "coordinates": [-79.0090,34.6118] } },
+    { "type": "Feature", "properties": { "feature_type": "splice_closure", "local_id": "SP-01", "attrs": { "count": "288ct" } }, "geometry": { "type": "Point", "coordinates": [-79.0150,34.6118] } },
+    { "type": "Feature", "properties": { "feature_type": "splice_closure", "local_id": "SP-02", "attrs": { "count": "144ct" } }, "geometry": { "type": "Point", "coordinates": [-79.0120,34.6118] } },
+    { "type": "Feature", "properties": { "feature_type": "pedestal", "local_id": "PED-01" }, "geometry": { "type": "Point", "coordinates": [-79.0135,34.6072] } },
+    { "type": "Feature", "properties": { "feature_type": "drop", "local_id": "DR-01" }, "geometry": { "type": "LineString", "coordinates": [[-79.0120,34.6118],[-79.0120,34.6112]] } },
+    { "type": "Feature", "properties": { "feature_type": "drop", "local_id": "DR-02" }, "geometry": { "type": "LineString", "coordinates": [[-79.0105,34.6118],[-79.0105,34.6124]] } },
+    { "type": "Feature", "properties": { "feature_type": "drop", "local_id": "DR-03" }, "geometry": { "type": "LineString", "coordinates": [[-79.0090,34.6118],[-79.0084,34.6118]] } }
+  ]
+}

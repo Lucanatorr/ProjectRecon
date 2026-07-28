@@ -20,6 +20,7 @@ from ui.uploads import save_upload
 SAMPLE = ROOT / "samples" / "AsBuilt_PhaseB_Tally.xlsx"
 PDF_SAMPLE = ROOT / "samples" / "AsBuilt_PhaseB.pdf"
 SCAN_SAMPLE = ROOT / "samples" / "AsBuilt_PhaseB_scanned.pdf"
+GEO_SAMPLE = ROOT / "samples" / "AsBuilt_PhaseB_map.geojson"
 
 _LEDE = ("Upload the tally sheet or as-built PDF. Structured tally sheets are summed "
          "by unit automatically; PDF extractions land in an editable grid so you "
@@ -34,6 +35,8 @@ def _conf_badge(confidence: str) -> str:
         return badge("Tally sum", "ok")
     if confidence == "confirmed":
         return badge("Confirmed", "ok")
+    if confidence == "geo":
+        return badge("Map / geodata", "ok")
     if confidence == "ocr":
         return badge("OCR · verify", "low")
     return badge("PDF · verify", "low")
@@ -43,6 +46,7 @@ def render(state: WizardState) -> None:
     st.markdown(lede(_LEDE), unsafe_allow_html=True)
     show_flash(state)
     _uploader(state)
+    _geojson_import(state)
 
     # warnings first: when an extraction yields nothing (e.g. a scan with no OCR
     # installed) the explanation is the only thing worth showing.
@@ -168,6 +172,107 @@ def _uploader(state: WizardState) -> None:
             st.rerun()
         except ValueError as e:
             st.error(f"Could not parse as-built: {e}")
+
+
+def _geo_quantities_table(lines) -> None:
+    html = card_open(f"Derived quantities · {len(lines)} code(s)",
+                     "Line lengths in feet from geometry; points counted by type.")
+    headers = [("Code", ""), ("Description", ""), ("Qty", "r"), ("UoM", ""),
+               ("From", "")]
+    rows = [[td(l.code or "—", "code"), td(l.raw_desc),
+             td(f"{l.qty:,.0f}", "r num"), td(l.uom.value if l.uom else ""),
+             td(l.source_ref or "")] for l in lines]
+    st.markdown(html + table_html(headers, rows) + card_close(),
+                unsafe_allow_html=True)
+
+
+def _geojson_import(state: WizardState) -> None:
+    """Import map geodata: features → quantities by contract code → this cycle's
+    as-built. Known feature types map via the per-project crosswalk (placeholder
+    codes editable here); unknown types are surfaced by a soft gate (D2)."""
+    from recon.geo.crosswalk import resolve_code
+    from recon.geo.derive import derive
+    from recon.geo.importer import load_features
+    from recon.geo.models import FEATURE_TYPES
+    from ui.db import feature_code_overrides, log_action, set_feature_code
+
+    with st.expander("Import from map / geodata (GeoJSON)",
+                     expanded=bool(st.session_state.get("_geo_text"))):
+        st.caption("Load field-captured features (points and lines). Quantities "
+                   "derive by contract code and become this cycle's as-built.")
+        c1, c2 = st.columns([3, 1])
+        up = c1.file_uploader("GeoJSON (.geojson / .json)",
+                              type=["geojson", "json"], key="geo_up",
+                              label_visibility="collapsed")
+        with c2:
+            if st.button("Load sample", key="geo_sample", use_container_width=True) \
+                    and GEO_SAMPLE.exists():
+                st.session_state["_geo_text"] = GEO_SAMPLE.read_text(encoding="utf-8")
+                st.session_state["_geo_name"] = GEO_SAMPLE.name
+        if up is not None:
+            st.session_state["_geo_text"] = up.getvalue().decode("utf-8", "replace")
+            st.session_state["_geo_name"] = up.name
+
+        text = st.session_state.get("_geo_text")
+        if not text:
+            return
+        try:
+            feats = load_features(text)
+        except ValueError as e:
+            st.error(f"Could not read GeoJSON: {e}")
+            return
+        if not feats:
+            st.warning("No usable features found in that file.")
+            return
+
+        overrides = dict(feature_code_overrides(state.project_name))
+        overrides.update(state.geo_code_overrides)
+        lines, unmapped = derive(feats, overrides or None)
+
+        _geo_quantities_table(lines)
+
+        present = [t for t in dict.fromkeys(f.feature_type for f in feats)
+                   if t in FEATURE_TYPES]
+        with st.expander("Feature type → contract code"):
+            st.caption("Registry codes are placeholders — set this job's real codes; "
+                       "they're saved per project.")
+            with st.form("geo_map"):
+                edits = {t: st.text_input(f"{FEATURE_TYPES[t].label}  ·  {t}",
+                                          value=resolve_code(t, overrides) or "",
+                                          key=f"geomap_{t}") for t in present}
+                if st.form_submit_button("Apply code mapping"):
+                    for t, code in edits.items():
+                        code = code.strip()
+                        if code and code != FEATURE_TYPES[t].default_code:
+                            state.geo_code_overrides[t] = code
+                            set_feature_code(state.project_name, t, code)
+                    st.rerun()
+
+        unmapped_types = list(dict.fromkeys(f.feature_type for f in unmapped))
+        ack = True
+        if unmapped_types:
+            st.warning(f"{len(unmapped)} feature(s) of unknown type "
+                       f"({', '.join(unmapped_types)}) aren't mapped to a code and "
+                       "will be left out of the as-built.")
+            ack = st.checkbox("Exclude them and continue", key="geo_ack")
+
+        if st.button("Use as this cycle's as-built", type="primary", key="geo_use",
+                     disabled=not lines or not ack):
+            state.asbuilt = [
+                AsBuiltLine(raw_desc=ln.raw_desc, qty=ln.qty, uom=ln.uom,
+                            code=ln.code, source_ref=ln.source_ref, confidence="geo")
+                for ln in lines]
+            for ln in lines:                        # pre-coded → auto-resolve crosswalk
+                state.resolved[ln.raw_desc] = ln.code
+            state.asbuilt_source = st.session_state.get("_geo_name", "geodata")
+            state.asbuilt_warnings = []
+            state.done.discard("asbuilt")
+            log_action("load_asbuilt", "asbuilt", actor=state.reviewer or None,
+                       detail={"source": state.asbuilt_source, "units": len(lines),
+                               "confidence": ["geo"], "unmapped": len(unmapped),
+                               "acknowledged": bool(unmapped_types)})
+            state.flash = f"Loaded {len(lines)} built units from map geodata."
+            st.rerun()
 
 
 def _log_asbuilt_load(state: WizardState, source: str) -> None:
