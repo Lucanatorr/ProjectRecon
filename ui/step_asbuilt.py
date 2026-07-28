@@ -229,6 +229,13 @@ def _geojson_import(state: WizardState) -> None:
         overrides.update(state.geo_code_overrides)
         lines, unmapped = derive(feats, overrides or None)
 
+        from streamlit_folium import st_folium
+
+        from ui.geo_map import feature_map, legend_html
+        st_folium(feature_map(feats, overrides or None), height=430,
+                  use_container_width=True, returned_objects=[], key="geo_map")
+        st.markdown(legend_html(feats), unsafe_allow_html=True)
+
         _geo_quantities_table(lines)
 
         present = [t for t in dict.fromkeys(f.feature_type for f in feats)

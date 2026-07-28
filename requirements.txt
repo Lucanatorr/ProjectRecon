@@ -10,8 +10,11 @@ reportlab>=4.0        # PDF fixtures now; PDF approval summary in Phase 4
 pydantic>=2.7
 
 # Geospatial as-built mapping (Phase 5 / Development). pyproj gives geodesic
-# lengths for map geometry → billable footage. Ships wheels; no GDAL needed.
+# lengths for map geometry → billable footage. folium + streamlit-folium render
+# the feature map. All ship wheels; no GDAL needed.
 pyproj>=3.6
+folium>=0.16
+streamlit-folium>=0.20
 
 # Dev / test
 pytest>=8.2
