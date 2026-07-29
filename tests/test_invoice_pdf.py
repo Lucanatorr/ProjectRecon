@@ -106,15 +106,15 @@ def test_zip_with_pdf_invoice(tmp_path):
     assert len(lines) == 8
 
 
-def test_full_pipeline_all_pdf_reaches_golden():
-    # PDF as-built + PDF invoice + contract → the same $35,408 headline
+def test_full_pipeline_pdf_invoice_reaches_golden():
+    # tally as-built + PDF invoice + contract → the same $35,408 headline
     from recon.contract import load_bid_schedule
     from recon.crosswalk import AliasStore, resolve
-    from recon.ingest.asbuilt_pdf import extract_asbuilt_pdf
+    from recon.ingest.tally import parse_tally
     from recon.reconcile import cycle_totals, reconcile
 
     contract = load_bid_schedule(SAMPLES / "Fiber_Build_2025_BidSchedule.xlsx")
-    asbuilt, _ = extract_asbuilt_pdf(SAMPLES / "AsBuilt_PhaseB.pdf")
+    asbuilt = parse_tally(SAMPLES / "AsBuilt_PhaseB_Tally.xlsx")
     invoices = parse_invoices([INVOICE_PDF])
     store = AliasStore()
     store.confirm("Directional Drilling 2 inch", "4.1")

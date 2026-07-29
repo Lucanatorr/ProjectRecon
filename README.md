@@ -25,12 +25,14 @@ Implemented end-to-end and validated against the mockup's hand-reconciled cycle
 
 **Phase 2 (PDF ingest) — complete, by sprint:**
 - ✅ 2.1 Zip ingest for invoices (extract, dispatch, dedupe; skips non-invoice members)
-- ✅ 2.2 As-built PDF table extraction (core) — pdfplumber tables → grouped
-  `AsBuiltLine`s (`confidence="pdf"`) + `ExtractionReport`; image-only pages flagged
-  for OCR (Phase 4), never silently trusted
-- ✅ 2.3 PDF as-built → editable grid (UI) — PDF upload dispatches to the extractor,
-  low-confidence rows land in an editable review grid with warnings; confirming
-  marks them `confidence="confirmed"`; trusted tally keeps the read-only badge table
+- ✅ 2.2 As-built PDF ingest (core) — a construction PDF's Adobe **comment
+  annotations** are parsed straight from the PDF text into `AsBuiltLine`s
+  (`confidence="annot"`) keyed by rate code — no OCR (see *As-built from PDF
+  comments*). Superseded the earlier table/OCR extraction
+- ✅ 2.3 PDF as-built → editable grid (UI) — PDF upload parses the comments,
+  quantities land in an editable review grid (with a Code column) with warnings;
+  confirming marks them `confidence="confirmed"`; trusted tally keeps the read-only
+  badge table
 - ✅ 2.4 PDF invoice parsing (core) — pdfplumber table extraction with column
   auto-detection (amount/price/qty claimed before the generic description so
   "Unit Price" is never mistaken for it); wired into the uploader and zip ingest
@@ -74,46 +76,31 @@ Implemented end-to-end and validated against the mockup's hand-reconciled cycle
   recorded with actor + timestamp and surfaced in an Export-step viewer. Also
   completes FR-7: confirmed crosswalk mappings now persist **globally** in SQLite,
   so the crosswalk gets smarter across jobs instead of forgetting on restart
-- ✅ 4.5 OCR for scanned PDFs — image-only pages are rendered and OCR'd, the
-  recognised words are reassembled into a table, and rows land as
-  `confidence="ocr"` so a human must confirm them. Needs the Tesseract binary; when
-  it's missing the extractor degrades gracefully with an install hint (see below)
+- ✅ 4.5 As-built from PDF comments — contractors mark up the construction PDF with
+  Adobe comments (FreeText annotations), one per span/structure. Those are
+  machine-readable text, so they're parsed **directly — no OCR** — into quantities
+  by rate code (`recon/ingest/asbuilt_annot.py`), landing as `confidence="annot"` in
+  the review grid where a human confirms them and codes the few items that vary
 - ✅ 4.6 Packaging & docs — one-command launchers (`run.ps1` / `run.sh`), a pinned
   `requirements.lock.txt`, a safe backup/restore tool, and configuration,
   operations, and troubleshooting documentation
 
-## Scanned PDFs (OCR)
+## As-built from PDF comments
 
-Text-based PDFs need nothing extra. **Scanned/image-only** as-builts additionally
-need the Tesseract binary (page rendering uses `pypdfium2`, which ships with
-pdfplumber — no Poppler required).
+Contractors mark up the construction PDF with **Adobe comments** (FreeText
+annotations) — one per span/structure, e.g. `AFO 288F | 6288 | 410' | AFO BOND | AFO SL`.
+Those comments are stored as text in the PDF (not pixels), so the As-built step
+parses them **directly with no OCR** — no Tesseract, no scanning:
 
-```powershell
-winget install UB-Mannheim.TesseractOCR
-```
-
-Then reopen your terminal and check it's on PATH:
-
-```powershell
-tesseract --version
-```
-
-If PATH didn't pick it up, either add `C:\Program Files\Tesseract-OCR` to PATH, or
-point the app at the binary in `recon/ingest/ocr.py`:
-
-```python
-pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-```
-
-Verify with the bundled scanned fixture — "Load scan" on the As-built step, or:
-
-```bash
-.venv/Scripts/python.exe -m pytest tests/test_ocr.py -v
-```
-
-The two OCR tests skip without Tesseract and run once it's installed. OCR output is
-always tagged `OCR · verify` and routed through the editable grid — never trusted
-without a human confirming it.
+- `recon/ingest/asbuilt_annot.py` extracts the FreeText annotations (pdfplumber) and
+  parses the field shorthand into billable quantities keyed by the rate sheet's codes
+  (`AFO SL <count>FOC` strand-and-lash footage, `AFO.S` coils, `AFO.GAA`/`AFO.GG`
+  anchors/guys, MST tails, buried fiber, markers, handholes…).
+- Spans marked *DID NOT BUILD* are excluded; shorthand that genuinely varies (conduit
+  size/method, pedestal size, splice type) is left for the coordinator to code in the
+  review grid rather than guessed.
+- Everything lands as `confidence="annot"` in the editable grid — confirmed by a human
+  before it counts.
 
 ## Architecture
 
@@ -133,10 +120,9 @@ recon/                  domain core (pure Python, no Streamlit)
   ingest/
     normalize.py            string + UoM canonicalization
     tally.py                xlsx/csv as-built
-    asbuilt_pdf.py          pdfplumber extraction + ExtractionReport
+    asbuilt_annot.py        PDF comment (FreeText) as-built → quantities by code
     invoices.py             xlsx/csv/pdf/zip dispatch + dedupe
     invoice_pdf.py          PDF invoices + per-contractor templates
-    ocr.py                  scanned-page OCR fallback
 ui/                     Streamlit presentation layer
   state.py                wizard state, resolutions, fingerprint
   gates.py                pre-export validation gates
@@ -144,7 +130,7 @@ ui/                     Streamlit presentation layer
   db.py  progress.py  uploads.py
   step_*.py               one module per wizard step
 app.py                  entry point + step router
-config.py               tolerances, matching, retainage, OCR, paths
+config.py               tolerances, matching, retainage, paths
 tools/backup.py         database backup / restore
 samples/                demo + fixture generator
 tests/                  unit · golden-file · integration · UI-flow
@@ -207,7 +193,6 @@ Tuning lives in `config.py`:
 | `MatchingConfig.auto_threshold` | 90 | Fuzzy score at or above which the crosswalk auto-maps |
 | `MatchingConfig.scorer` | `WRatio` | rapidfuzz scorer |
 | `ReconConfig.retainage_default_pct` | 10 | Default contract retainage |
-| `OcrConfig.enabled` / `resolution` / `min_confidence` | true / 300 / 40 | Scanned-PDF OCR |
 
 Environment:
 
@@ -245,7 +230,7 @@ deleting old `audit_log` rows if it ever needs it.
 
 | Symptom | Cause / fix |
 |---|---|
-| Scanned PDF reads as 0 rows | Tesseract isn't installed — see [Scanned PDFs (OCR)](#scanned-pdfs-ocr). The app says so in a warning. |
+| PDF as-built reads as 0 lines | The PDF has no Adobe comment annotations (or they're image stamps, not FreeText). Only commented construction PDFs parse — see [As-built from PDF comments](#as-built-from-pdf-comments). |
 | Downloads are greyed out on Export | Pre-export checks haven't passed. Fix the listed items, or record an explicit override. |
 | A description keeps coming back for review | Below the auto-map threshold. Confirm it once — it's saved globally and reused on later jobs. |
 | Port 8501 already in use | `.\run.ps1 -Port 8502` (or `./run.sh --port=8502`). |

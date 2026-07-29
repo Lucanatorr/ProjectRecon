@@ -46,7 +46,7 @@ def test_missing_bid_schedule_blocks():
 
 def test_unconfirmed_extracted_rows_block():
     s = _clean_state()
-    s.asbuilt = [AsBuiltLine("A", 10, UoM.EA, code="A", confidence="pdf")]
+    s.asbuilt = [AsBuiltLine("A", 10, UoM.EA, code="A", confidence="annot")]
     g = _gate(s, "confidence")
     assert g.ok is False
     assert "not yet confirmed" in g.detail

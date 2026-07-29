@@ -74,7 +74,7 @@ class AsBuiltLine:
     code: str | None = None   # filled after crosswalk
     source_file: str | None = None
     source_ref: str | None = None    # row / page reference for traceability
-    confidence: str = "sum"          # sum | pdf | ocr
+    confidence: str = "sum"          # sum | annot | confirmed
 
 
 @dataclass
