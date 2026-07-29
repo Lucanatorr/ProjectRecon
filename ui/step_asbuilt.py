@@ -160,17 +160,28 @@ def _uploader(state: WizardState) -> None:
 
 
 def _ingest_pdf_annotations(state: WizardState, path, name: str) -> None:
-    """Parse a construction PDF's comment annotations into as-built quantities."""
+    """Parse a construction PDF's comment annotations into as-built quantities,
+    matched against the already-loaded bid schedule; unmatched items fall to the
+    crosswalk."""
     with loading_bar("Reading PDF comments…") as step:
         step(30, "Extracting comments…")
         res = parse_annotations(extract_annotations(path))
-        step(80, "Deriving quantities…")
-        state.asbuilt = to_asbuilt_lines(res)
+        step(70, "Matching to the bid schedule…")
+        lines, resolved = to_asbuilt_lines(res, state.contract, state.aliases)
+        state.asbuilt = lines
         step(100, "Done")
     state.asbuilt_source = name
+    state.resolved.update(resolved)              # confident contract matches
     st.session_state["_annot_unresolved"] = res.unresolved
 
     warnings = []
+    if not state.contract:
+        warnings.append("No bid schedule loaded yet — load the Contract step first "
+                        "so quantities can be matched to contract codes.")
+    unmatched = len(lines) - len(resolved)
+    if state.contract and unmatched:
+        warnings.append(f"{unmatched} of {len(lines)} line(s) didn't match the bid "
+                        "schedule — resolve them in the Crosswalk step.")
     if res.excluded:
         warnings.append(f"{len(res.excluded)} span(s) marked “DID NOT BUILD” were "
                         "excluded.")
@@ -180,8 +191,8 @@ def _ingest_pdf_annotations(state: WizardState, path, name: str) -> None:
                         "below, then add them in the grid.")
     state.asbuilt_warnings = warnings
     _log_asbuilt_load(state, name)
-    state.flash = (f"Parsed {len(state.asbuilt)} quantity line(s) from "
-                   f"{res.records} PDF comment(s).")
+    state.flash = (f"Parsed {len(lines)} quantity line(s) from {res.records} PDF "
+                   f"comment(s); {len(resolved)} matched the bid schedule.")
 
 
 def _log_asbuilt_load(state: WizardState, source: str) -> None:

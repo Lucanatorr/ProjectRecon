@@ -112,20 +112,34 @@ def test_odd_mst_tail_snaps_to_nearest_rate_bracket():
     assert r.qty["mst_150"] == 1                        # 160 → nearest bracket 150
 
 
-# --- to AsBuiltLine -------------------------------------------------------- #
-def test_to_asbuilt_lines_carry_codes_and_confidence():
+# --- to AsBuiltLine: match against the loaded contract --------------------- #
+def _contract(*codes):
+    from recon.models import ContractItem, UoM as U
+    return [ContractItem(c, f"{c} description", U.FT, 1.0, 0) for c in codes]
+
+
+def test_lines_match_against_the_loaded_contract():
     r = _parse("AFO 288F | 6288 | 410' | AFO BOND | AFO SL",
                "BFO 144F | 18720 | 375' | BM53")
-    lines = {ln.code: ln for ln in to_asbuilt_lines(r)}
-    assert lines["AFO SL 288FOC"].qty == 410
-    assert lines["AFO SL 288FOC"].uom == UoM.FT
-    assert lines["AFO SL 288FOC"].confidence == "annot"
-    assert lines["BFO.144.I"].qty == 375
-    assert lines["BM53"].qty == 1
+    contract = _contract("AFO SL 288FOC", "AFO.BOND", "BFO.144.I", "BM53")
+    lines, resolved = to_asbuilt_lines(r, contract)
+    by_code = {ln.code: ln for ln in lines}
+    assert by_code["AFO SL 288FOC"].qty == 410
+    assert by_code["AFO SL 288FOC"].uom == UoM.FT
+    assert by_code["AFO SL 288FOC"].confidence == "annot"
+    assert by_code["BFO.144.I"].qty == 375 and by_code["BM53"].qty == 1
+    # confident matches seed the crosswalk so they skip review
+    assert resolved[by_code["AFO SL 288FOC"].raw_desc] == "AFO SL 288FOC"
 
 
-def test_code_map_resolves_an_ambiguous_item():
-    r = _parse("BHF-30T | 14746 | 14896 | BFO 144F- 150'")   # buried + handhole
-    # a coordinator maps the buried-144 to the 'existing duct' variant:
-    lines = {ln.code: ln for ln in to_asbuilt_lines(r, {"buried_144": "BFO.144.IE"})}
-    assert "BFO.144.IE" in lines and "BFO.144.I" not in lines
+def test_unmatched_items_carry_no_code_for_the_crosswalk():
+    r = _parse("AFO 288F | 6288 | 410' | AFO SL")
+    lines, resolved = to_asbuilt_lines(r, _contract("SOMETHING.ELSE"))
+    assert lines[0].code is None            # not in the loaded contract
+    assert resolved == {}                   # nothing auto-mapped → crosswalk verifies
+
+
+def test_no_contract_leaves_everything_for_the_crosswalk():
+    r = _parse("AFO 288F | 6288 | 410' | AFO SL")
+    lines, resolved = to_asbuilt_lines(r)   # bid schedule not loaded
+    assert lines[0].code is None and resolved == {}

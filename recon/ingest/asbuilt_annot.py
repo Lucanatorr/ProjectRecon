@@ -267,22 +267,45 @@ def _classify(t: str, prim, page: int, res: AnnotParse) -> None:
     res.unresolved.append((page, t))
 
 
-def to_asbuilt_lines(res: AnnotParse,
-                     code_map: dict[str, str] | None = None) -> list[AsBuiltLine]:
-    """The parsed quantities as ``AsBuiltLine``s for the reconciliation engine.
-    ``code_map`` overrides item-key → rate code (the editable per-project crosswalk;
-    resolves the ambiguous items). Items still lacking a code carry ``code=None`` so
-    they land in the review grid."""
-    code_map = code_map or {}
+def to_asbuilt_lines(res: AnnotParse, contract=None, aliases=None
+                     ) -> tuple[list[AsBuiltLine], dict[str, str]]:
+    """The parsed quantities as ``AsBuiltLine``s, **matched against the loaded
+    contract** (the bid schedule loads before the as-built, so its items are on
+    hand). Each item's rate-code hint or description is resolved to a contract code
+    the same way the crosswalk does — matching on both the code and the description
+    columns. Returns ``(lines, resolved)`` where ``resolved`` maps raw_desc → code
+    for the confident matches (so they skip crosswalk review); anything that doesn't
+    match confidently carries ``code=None`` and is sent to the crosswalk to verify.
+    """
     lines: list[AsBuiltLine] = []
+    resolved: dict[str, str] = {}
     for key, qty in res.qty.items():
         if not qty:
             continue
-        code = code_map.get(key, res.code.get(key))
+        label = res.label.get(key, key)
+        code = _resolve_against_contract(res.code.get(key), label, contract, aliases)
+        if code:
+            resolved[label] = code
         n = res.spans.get(key, 0)
         lines.append(AsBuiltLine(
-            raw_desc=res.label.get(key, key), qty=float(round(qty, 1)),
+            raw_desc=label, qty=float(round(qty, 1)),
             uom=UoM.from_str(res.uom.get(key)) or UoM.EA, code=code,
             source_ref=f"annot:{n} record{'s' if n != 1 else ''}",
             confidence="annot"))
-    return lines
+    return lines, resolved
+
+
+def _resolve_against_contract(hint, label, contract, aliases):
+    """A parsed item's contract code, via the crosswalk engine — its rate-code hint
+    (an exact code match) first, then its description (fuzzy). None when neither is
+    confident, so the item goes to the crosswalk step."""
+    if not contract:
+        return None
+    from recon.crosswalk import AliasStore, resolve
+    aliases = aliases if aliases is not None else AliasStore()
+    for text in (hint, label):
+        if text:
+            m = resolve(text, contract, aliases)
+            if m.code:
+                return m.code
+    return None
