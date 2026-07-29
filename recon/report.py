@@ -161,6 +161,14 @@ def _money(v: float) -> str:
     return f"{sign}${abs(v):,.2f}"
 
 
+def _esc(text) -> str:
+    """XML-escape free text for a reportlab Paragraph — contract descriptions and
+    codes can contain ``<`` / ``&`` (e.g. rate-sheet vault sizes ``14"<VAULT ≤30"``),
+    which the paragraph parser would otherwise read as markup."""
+    from xml.sax.saxutils import escape
+    return escape("" if text is None else str(text))
+
+
 def build_pdf_summary(rows: list[ReconRow], totals: CycleTotals,
                      cycle_label: str = "", *, max_flagged: int = 18,
                      resolutions: dict | None = None,
@@ -199,7 +207,7 @@ def build_pdf_summary(rows: list[ReconRow], totals: CycleTotals,
     # --- header ---
     flow.append(Paragraph("Splice — Reconciliation Summary", st_title))
     if cycle_label:
-        flow.append(Paragraph(cycle_label, st_sub))
+        flow.append(Paragraph(_esc(cycle_label), st_sub))
     flow.append(Paragraph(
         f"Generated {datetime.now():%Y-%m-%d %H:%M} · contractor invoice reconciled "
         "against documented as-built quantities", st_sub))
@@ -213,7 +221,8 @@ def build_pdf_summary(rows: list[ReconRow], totals: CycleTotals,
         when = override.get("at") or ""
         flow.append(Paragraph(
             f"<b>EXPORTED WITH OVERRIDE</b> — pre-export checks did not pass. "
-            f"Reason: {override.get('reason', '—')} ({who} {when})", st_ovr))
+            f"Reason: {_esc(override.get('reason', '—'))} "
+            f"({_esc(who)} {_esc(when)})", st_ovr))
     flow.append(Spacer(1, 10))
 
     # --- headline metrics ---
@@ -265,20 +274,20 @@ def build_pdf_summary(rows: list[ReconRow], totals: CycleTotals,
         for r in shown:
             finding = "; ".join(f.message for f in r.flags) or "—"
             row_cells = [
-                Paragraph(r.code or "—", st_cell),
-                Paragraph(r.description, st_cell),
+                Paragraph(_esc(r.code or "—"), st_cell),
+                Paragraph(_esc(r.description), st_cell),
                 Paragraph(f"{r.built_qty:,.0f}", st_cell),
                 Paragraph(f"{r.billed_qty:,.0f}", st_cell),
                 Paragraph(_money(r.amount_variance), st_cell),
                 Paragraph(r.severity.value.upper(), st_cell),
-                Paragraph(finding, st_cell),
+                Paragraph(_esc(finding), st_cell),
             ]
             if resolutions:
                 res = resolutions.get(r.code or r.description) or {}
                 label = (res.get("status") or "open").upper()
                 if res.get("note"):
                     label += f" — {res['note']}"
-                row_cells.append(Paragraph(label, st_cell))
+                row_cells.append(Paragraph(_esc(label), st_cell))
             data.append(row_cells)
 
         # widths sum to the 7.3in printable width (letter minus 0.6in margins)
