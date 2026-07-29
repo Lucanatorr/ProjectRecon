@@ -187,23 +187,30 @@ def _geo_quantities_table(lines) -> None:
 
 
 def _geojson_import(state: WizardState) -> None:
-    """Import map geodata: features → quantities by contract code → this cycle's
-    as-built. Known feature types map via the per-project crosswalk (placeholder
-    codes editable here); unknown types are surfaced by a soft gate (D2)."""
+    """Import a GeoJSON and/or draw features on the map; both derive to quantities
+    by contract code and become this cycle's as-built. Known types map via the
+    per-project crosswalk (placeholder codes editable here); unknown types are
+    surfaced by a soft gate (D2)."""
+    import json as _json
+
+    from streamlit_folium import st_folium
+
     from recon.geo.crosswalk import resolve_code
     from recon.geo.derive import derive
     from recon.geo.importer import load_features
     from recon.geo.models import FEATURE_TYPES
     from ui.db import feature_code_overrides, log_action, set_feature_code
+    from ui.geo_map import drawn_to_feature, feature_map, legend_html
 
-    with st.expander("Import from map / geodata (GeoJSON)",
-                     expanded=bool(st.session_state.get("_geo_text"))):
-        st.caption("Load field-captured features (points and lines). Quantities "
+    open_ = bool(st.session_state.get("_geo_text")) or bool(state.geo_drawn)
+    with st.expander("Import or draw as-built features (map / geodata)",
+                     expanded=open_):
+        st.caption("Import a GeoJSON and/or draw features on the map. Quantities "
                    "derive by contract code and become this cycle's as-built.")
+
         c1, c2 = st.columns([3, 1])
-        up = c1.file_uploader("GeoJSON (.geojson / .json)",
-                              type=["geojson", "json"], key="geo_up",
-                              label_visibility="collapsed")
+        up = c1.file_uploader("GeoJSON (.geojson / .json)", type=["geojson", "json"],
+                              key="geo_up", label_visibility="collapsed")
         with c2:
             if st.button("Load sample", key="geo_sample", use_container_width=True) \
                     and GEO_SAMPLE.exists():
@@ -213,29 +220,52 @@ def _geojson_import(state: WizardState) -> None:
             st.session_state["_geo_text"] = up.getvalue().decode("utf-8", "replace")
             st.session_state["_geo_name"] = up.name
 
+        imported: list = []
         text = st.session_state.get("_geo_text")
-        if not text:
-            return
-        try:
-            feats = load_features(text)
-        except ValueError as e:
-            st.error(f"Could not read GeoJSON: {e}")
-            return
-        if not feats:
-            st.warning("No usable features found in that file.")
-            return
+        if text:
+            try:
+                imported = load_features(text)
+            except ValueError as e:
+                st.error(f"Could not read GeoJSON: {e}")
+        feats = imported + list(state.geo_drawn)
 
         overrides = dict(feature_code_overrides(state.project_name))
         overrides.update(state.geo_code_overrides)
+
+        active = st.selectbox(
+            "Feature type to draw", options=list(FEATURE_TYPES),
+            format_func=lambda t: FEATURE_TYPES[t].label, key="geo_draw_type",
+            help="Pick a type, then drop a point or draw a line on the map.")
+
+        ret = st_folium(feature_map(feats, overrides or None, draw=True),
+                        height=460, use_container_width=True,
+                        returned_objects=["last_active_drawing"], key="geo_map")
+        last = (ret or {}).get("last_active_drawing")
+        if last:
+            sig = _json.dumps(last.get("geometry"), sort_keys=True)
+            if sig and sig != st.session_state.get("_geo_last_draw"):
+                st.session_state["_geo_last_draw"] = sig
+                drawn = drawn_to_feature(last, active,
+                                         local_id=f"draw-{len(state.geo_drawn) + 1}")
+                if drawn:
+                    state.geo_drawn.append(drawn)
+                    st.rerun()
+
+        if feats:
+            st.markdown(legend_html(feats), unsafe_allow_html=True)
+        if state.geo_drawn:
+            d1, d2 = st.columns([3, 1])
+            d1.caption(f"{len(state.geo_drawn)} feature(s) drawn this session.")
+            if d2.button("Clear drawn", key="geo_clear_drawn"):
+                state.geo_drawn.clear()
+                st.session_state.pop("_geo_last_draw", None)
+                st.rerun()
+
+        if not feats:
+            st.info("Import a GeoJSON or draw features on the map to begin.")
+            return
+
         lines, unmapped = derive(feats, overrides or None)
-
-        from streamlit_folium import st_folium
-
-        from ui.geo_map import feature_map, legend_html
-        st_folium(feature_map(feats, overrides or None), height=430,
-                  use_container_width=True, returned_objects=[], key="geo_map")
-        st.markdown(legend_html(feats), unsafe_allow_html=True)
-
         _geo_quantities_table(lines)
 
         present = [t for t in dict.fromkeys(f.feature_type for f in feats)
@@ -243,7 +273,7 @@ def _geojson_import(state: WizardState) -> None:
         with st.expander("Feature type → contract code"):
             st.caption("Registry codes are placeholders — set this job's real codes; "
                        "they're saved per project.")
-            with st.form("geo_map"):
+            with st.form("geo_codemap_form"):
                 edits = {t: st.text_input(f"{FEATURE_TYPES[t].label}  ·  {t}",
                                           value=resolve_code(t, overrides) or "",
                                           key=f"geomap_{t}") for t in present}
@@ -263,6 +293,7 @@ def _geojson_import(state: WizardState) -> None:
                        "will be left out of the as-built.")
             ack = st.checkbox("Exclude them and continue", key="geo_ack")
 
+        n_src = f"{len(imported)} imported + {len(state.geo_drawn)} drawn"
         if st.button("Use as this cycle's as-built", type="primary", key="geo_use",
                      disabled=not lines or not ack):
             state.asbuilt = [
@@ -271,14 +302,16 @@ def _geojson_import(state: WizardState) -> None:
                 for ln in lines]
             for ln in lines:                        # pre-coded → auto-resolve crosswalk
                 state.resolved[ln.raw_desc] = ln.code
-            state.asbuilt_source = st.session_state.get("_geo_name", "geodata")
+            state.asbuilt_source = st.session_state.get("_geo_name") or "map geodata"
             state.asbuilt_warnings = []
             state.done.discard("asbuilt")
             log_action("load_asbuilt", "asbuilt", actor=state.reviewer or None,
                        detail={"source": state.asbuilt_source, "units": len(lines),
-                               "confidence": ["geo"], "unmapped": len(unmapped),
+                               "features": n_src, "confidence": ["geo"],
+                               "unmapped": len(unmapped),
                                "acknowledged": bool(unmapped_types)})
-            state.flash = f"Loaded {len(lines)} built units from map geodata."
+            state.flash = (f"Loaded {len(lines)} built units from map geodata "
+                           f"({n_src}).")
             st.rerun()
 
 

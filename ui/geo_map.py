@@ -50,9 +50,11 @@ def _popup_html(f: GeoFeature, code: str | None) -> str:
 
 
 def feature_map(features: list[GeoFeature],
-                code_map: dict[str, str] | None = None) -> folium.Map:
+                code_map: dict[str, str] | None = None,
+                draw: bool = False) -> folium.Map:
     """A folium map of the features over aerial imagery, coloured by type, each with
-    a click-to-inspect popup. Bounds fit the data."""
+    a click-to-inspect popup. Bounds fit the data. With ``draw=True`` the map gets
+    Leaflet.draw controls for placing points and drawing lines."""
     pts = [p for f in features for p in _latlon(f.geometry)]
     if pts:
         lats = [p[0] for p in pts]
@@ -84,7 +86,28 @@ def feature_map(features: list[GeoFeature],
 
     if len(pts) > 1:
         m.fit_bounds([[min(lats), min(lons)], [max(lats), max(lons)]])
+
+    if draw:
+        from folium.plugins import Draw
+        Draw(export=False,
+             draw_options={"polyline": True, "marker": True, "polygon": False,
+                           "rectangle": False, "circle": False,
+                           "circlemarker": False},
+             edit_options={"edit": False}).add_to(m)
     return m
+
+
+def drawn_to_feature(drawing: dict, feature_type: str,
+                     local_id: str | None = None) -> GeoFeature | None:
+    """Convert a Leaflet.draw result (a GeoJSON Feature or a bare geometry) into a
+    GeoFeature of the given type. Returns None for unsupported geometry."""
+    if not drawing:
+        return None
+    geom = drawing.get("geometry") if drawing.get("type") == "Feature" else drawing
+    if not geom or geom.get("type") not in ("Point", "LineString", "MultiLineString"):
+        return None
+    return GeoFeature(feature_type=feature_type, geometry=geom,
+                      source="desk-draw", local_id=local_id)
 
 
 def legend_html(features: list[GeoFeature]) -> str:

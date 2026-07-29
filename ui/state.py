@@ -44,6 +44,8 @@ class WizardState:
     # geo as-built: session-level feature_type -> code edits (merged with the
     # project's saved overrides), used when importing map geodata as the as-built
     geo_code_overrides: dict[str, str] = field(default_factory=dict)
+    # features drawn on the map this session (merged with any imported GeoJSON)
+    geo_drawn: list = field(default_factory=list)
 
     billing_mode: str = "cumulative"       # or "discrete"
     retainage_pct: float = 10.0            # contract-required retainage
