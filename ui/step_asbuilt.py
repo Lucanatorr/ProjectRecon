@@ -1,15 +1,22 @@
-"""Step 1 — As-built: upload tally sheet or PDF; confirm built quantities.
+"""Step 1 — As-built: load a tally sheet or a marked-up construction PDF; confirm
+built quantities.
 
-Trusted tally sheets render as the mockup's badge table (read-only, editable on
-demand). PDF extractions are lower-confidence, so they land in an editable review
-grid up front — the human confirms every number before it counts (spec §5b)."""
+Trusted tally sheets render as a read-only badge table. A construction PDF's
+**Adobe comment annotations** (one per span/structure) are parsed straight from the
+PDF's text — no OCR — into quantities keyed by the rate sheet's codes; those land in
+an editable review grid so the coordinator confirms every number, and assigns codes
+to the handful of items that vary (conduit, pedestal, splice), before it counts."""
 from __future__ import annotations
 
 import pandas as pd
 import streamlit as st
 
 from config import ROOT
-from recon.ingest.asbuilt_pdf import extract_asbuilt_pdf
+from recon.ingest.asbuilt_annot import (
+    extract_annotations,
+    parse_annotations,
+    to_asbuilt_lines,
+)
 from recon.ingest.tally import parse_tally
 from recon.models import AsBuiltLine, UoM
 from ui.progress import is_new_upload, loading_bar, show_flash, upload_signature
@@ -18,15 +25,14 @@ from ui.theme import badge, card_close, card_open, lede, table_html, td
 from ui.uploads import save_upload
 
 SAMPLE = ROOT / "samples" / "AsBuilt_PhaseB_Tally.xlsx"
-PDF_SAMPLE = ROOT / "samples" / "AsBuilt_PhaseB.pdf"
-SCAN_SAMPLE = ROOT / "samples" / "AsBuilt_PhaseB_scanned.pdf"
 
-_LEDE = ("Upload the tally sheet or as-built PDF. Structured tally sheets are summed "
-         "by unit automatically; PDF extractions land in an editable grid so you "
-         "confirm every number before it counts.")
+_LEDE = ("Load the tally sheet or the marked-up construction PDF. Tally sheets are "
+         "summed by unit; a PDF's Adobe comments are parsed into quantities by rate "
+         "code and land in an editable grid so you confirm every number — and code "
+         "the few items that vary — before it counts.")
 
 # Confidence values that still require a human to review the numbers.
-_UNCONFIRMED = ("pdf", "ocr")
+_UNCONFIRMED = ("annot",)
 
 
 def _conf_badge(confidence: str) -> str:
@@ -34,9 +40,9 @@ def _conf_badge(confidence: str) -> str:
         return badge("Tally sum", "ok")
     if confidence == "confirmed":
         return badge("Confirmed", "ok")
-    if confidence == "ocr":
-        return badge("OCR · verify", "low")
-    return badge("PDF · verify", "low")
+    if confidence == "annot":
+        return badge("PDF comments · verify", "low")
+    return badge("Verify", "low")
 
 
 def render(state: WizardState) -> None:
@@ -44,17 +50,17 @@ def render(state: WizardState) -> None:
     show_flash(state)
     _uploader(state)
 
-    # warnings first: when an extraction yields nothing (e.g. a scan with no OCR
-    # installed) the explanation is the only thing worth showing.
     for w in state.asbuilt_warnings:
         st.warning(w)
+    _unresolved_panel()
 
     if not state.asbuilt:
-        st.info("Upload a tally sheet or PDF, or click **Load sample**.")
+        st.info("Load a tally sheet or a marked-up construction PDF, or click "
+                "**Load sample tally**.")
         return
 
     if any(a.confidence in _UNCONFIRMED for a in state.asbuilt):
-        _render_review_grid(state)          # PDF/OCR — confirm before it counts
+        _render_review_grid(state)          # PDF comments — confirm before it counts
     else:
         _render_confirmed_table(state)      # trusted tally / already confirmed
 
@@ -62,15 +68,15 @@ def render(state: WizardState) -> None:
 def _render_confirmed_table(state: WizardState) -> None:
     note = f'Source: {state.asbuilt_source or "—"} · summed by unit'
     html = card_open(f"Built quantities · {len(state.asbuilt)} units", note)
-    headers = [("Description", ""), ("Built qty", "r"), ("UoM", ""),
-               ("Segment", ""), ("Confidence", "")]
+    headers = [("Code", ""), ("Description", ""), ("Built qty", "r"), ("UoM", ""),
+               ("Confidence", "")]
     rows = []
     for a in state.asbuilt:
         rows.append([
+            td(a.code or "—", "code"),
             td(a.raw_desc),
             td(f"{a.qty:,.0f}", "r num"),
             td(a.uom.value if a.uom else ""),
-            td(a.segment or ""),
             f"<td>{_conf_badge(a.confidence)}</td>",
         ])
     html += table_html(headers, rows) + card_close()
@@ -86,24 +92,41 @@ def _render_confirmed_table(state: WizardState) -> None:
 
 def _render_review_grid(state: WizardState) -> None:
     st.markdown(
-        f'<div class="card__t" style="margin-bottom:4px">Review extracted quantities '
-        f'· {len(state.asbuilt)} units</div>'
+        f'<div class="card__t" style="margin-bottom:4px">Review parsed quantities '
+        f'· {len(state.asbuilt)} lines</div>'
         f'<div class="card__note" style="margin-bottom:10px">Source: '
-        f'{state.asbuilt_source or "—"} · extracted from PDF — correct anything that '
-        f'looks off, then confirm.</div>', unsafe_allow_html=True)
+        f'{state.asbuilt_source or "—"} · from PDF comments — correct anything that '
+        f'looks off and set a code for any blank one, then confirm.</div>',
+        unsafe_allow_html=True)
     _editor(state, key="asbuilt_review", confirm_label="Confirm built quantities",
             confirm=True)
 
 
+def _unresolved_panel() -> None:
+    """Comment tokens that couldn't be auto-classified (conduit / pedestal / splice
+    vary) — listed so the coordinator can add them by hand in the grid."""
+    items = st.session_state.get("_annot_unresolved") or []
+    if not items:
+        return
+    with st.expander(f"Items needing manual entry · {len(items)}"):
+        st.caption("These comment notes vary (conduit size/method, pedestal size, "
+                   "splice type), so they aren't auto-coded — add them as rows below "
+                   "with the right rate code.")
+        headers = [("Page", ""), ("Comment token", "")]
+        body = [[td(f"p{p}"), td(t)] for p, t in items]
+        st.markdown(table_html(headers, body), unsafe_allow_html=True)
+
+
 def _uploader(state: WizardState) -> None:
-    c1, c2, c3, c4 = st.columns([3, 1, 1, 1])
+    c1, c2 = st.columns([3, 1])
     with c1:
-        up = st.file_uploader("Tally sheet or as-built PDF (xlsx / csv / pdf)",
-                             type=["xlsx", "csv", "pdf"], key="asbuilt_up")
+        up = st.file_uploader(
+            "Tally sheet (xlsx / csv) or marked-up construction PDF",
+            type=["xlsx", "csv", "pdf"], key="asbuilt_up")
     with c2:
         st.write("")
         st.write("")
-        if st.button("Load tally", use_container_width=True, key="ab_sample") \
+        if st.button("Load sample tally", use_container_width=True, key="ab_sample") \
                 and SAMPLE.exists():
             with loading_bar("Loading sample tally…") as step:
                 step(40, "Summing by unit…")
@@ -111,63 +134,65 @@ def _uploader(state: WizardState) -> None:
                 step(100, "Done")
             state.asbuilt_source = SAMPLE.name
             state.asbuilt_warnings = []
+            st.session_state.pop("_annot_unresolved", None)
             _log_asbuilt_load(state, SAMPLE.name)
             state.flash = f"Loaded {len(state.asbuilt)} built units."
             st.rerun()
-    with c3:
-        st.write("")
-        st.write("")
-        if st.button("Load PDF", use_container_width=True, key="ab_pdf_sample") \
-                and PDF_SAMPLE.exists():
-            with loading_bar("Loading sample PDF…") as step:
-                step(45, "Extracting table…")
-                lines, report = extract_asbuilt_pdf(PDF_SAMPLE)
-                step(100, "Done")
-            state.asbuilt = lines
-            state.asbuilt_source = PDF_SAMPLE.name
-            state.asbuilt_warnings = list(report.warnings)
-            _log_asbuilt_load(state, PDF_SAMPLE.name)
-            state.flash = f"Extracted {len(lines)} built units from the PDF."
-            st.rerun()
-    with c4:
-        st.write("")
-        st.write("")
-        if st.button("Load scan", use_container_width=True, key="ab_scan_sample",
-                     help="A scanned (image-only) as-built — needs OCR to read.") \
-                and SCAN_SAMPLE.exists():
-            with loading_bar("Reading scanned PDF…") as step:
-                step(45, "Running OCR…")
-                lines, report = extract_asbuilt_pdf(SCAN_SAMPLE)
-                step(100, "Done")
-            state.asbuilt = lines
-            state.asbuilt_source = SCAN_SAMPLE.name
-            state.asbuilt_warnings = list(report.warnings)
-            _log_asbuilt_load(state, SCAN_SAMPLE.name)
-            state.flash = (f"Read {len(lines)} built units by OCR."
-                           if report.ocr_pages else
-                           "Scanned PDF could not be read — see the warning below.")
-            st.rerun()
+
     if up is not None and is_new_upload("asbuilt_up_sig", upload_signature(up)):
         try:
-            with loading_bar("Loading as-built…") as step:
-                step(20, "Reading file…")
-                path = save_upload(up)
-                is_pdf = path.suffix.lower() == ".pdf"
-                step(55, "Extracting table…" if is_pdf else "Summing by unit…")
-                if is_pdf:
-                    lines, report = extract_asbuilt_pdf(path)
-                    state.asbuilt = lines
-                    state.asbuilt_warnings = list(report.warnings)
-                else:
+            path = save_upload(up)
+            if path.suffix.lower() == ".pdf":
+                _ingest_pdf_annotations(state, path, up.name)
+            else:
+                with loading_bar("Loading tally…") as step:
+                    step(55, "Summing by unit…")
                     state.asbuilt = parse_tally(path)
-                    state.asbuilt_warnings = []
-                step(100, "Done")
-            state.asbuilt_source = up.name
-            _log_asbuilt_load(state, up.name)
-            state.flash = f"Loaded {len(state.asbuilt)} built units."
+                    step(100, "Done")
+                state.asbuilt_source = up.name
+                state.asbuilt_warnings = []
+                st.session_state.pop("_annot_unresolved", None)
+                _log_asbuilt_load(state, up.name)
+                state.flash = f"Loaded {len(state.asbuilt)} built units."
             st.rerun()
         except ValueError as e:
             st.error(f"Could not parse as-built: {e}")
+
+
+def _ingest_pdf_annotations(state: WizardState, path, name: str) -> None:
+    """Parse a construction PDF's comment annotations into as-built quantities,
+    matched against the already-loaded bid schedule; unmatched items fall to the
+    crosswalk."""
+    with loading_bar("Reading PDF comments…") as step:
+        step(30, "Extracting comments…")
+        res = parse_annotations(extract_annotations(path))
+        step(70, "Matching to the bid schedule…")
+        lines, resolved = to_asbuilt_lines(res, state.contract, state.aliases)
+        state.asbuilt = lines
+        step(100, "Done")
+    state.asbuilt_source = name
+    state.resolved.update(resolved)              # confident contract matches
+    st.session_state["_annot_unresolved"] = res.unresolved
+
+    warnings = []
+    if not state.contract:
+        warnings.append("No bid schedule loaded yet — load the Contract step first "
+                        "so quantities can be matched to contract codes.")
+    unmatched = len(lines) - len(resolved)
+    if state.contract and unmatched:
+        warnings.append(f"{unmatched} of {len(lines)} line(s) didn't match the bid "
+                        "schedule — resolve them in the Crosswalk step.")
+    if res.excluded:
+        warnings.append(f"{len(res.excluded)} span(s) marked “DID NOT BUILD” were "
+                        "excluded.")
+    if res.unresolved:
+        warnings.append(f"{len(res.unresolved)} comment item(s) vary (conduit / "
+                        "pedestal / splice) and need manual entry — see the list "
+                        "below, then add them in the grid.")
+    state.asbuilt_warnings = warnings
+    _log_asbuilt_load(state, name)
+    state.flash = (f"Parsed {len(lines)} quantity line(s) from {res.records} PDF "
+                   f"comment(s); {len(resolved)} matched the bid schedule.")
 
 
 def _log_asbuilt_load(state: WizardState, source: str) -> None:
@@ -182,31 +207,32 @@ def _log_asbuilt_load(state: WizardState, source: str) -> None:
 def _editor(state: WizardState, *, key: str, confirm_label: str,
             confirm: bool = False) -> None:
     df = pd.DataFrame([{
-        "Description": a.raw_desc, "Built qty": a.qty,
-        "UoM": a.uom.value if a.uom else "", "Segment": a.segment or "",
-        "Confidence": a.confidence,
+        "Code": a.code or "", "Description": a.raw_desc, "Built qty": a.qty,
+        "UoM": a.uom.value if a.uom else "", "Confidence": a.confidence,
     } for a in state.asbuilt])
     edited = st.data_editor(
         df, use_container_width=True, hide_index=True, key=key, num_rows="dynamic",
         disabled=["Confidence"],
         column_config={"Built qty": st.column_config.NumberColumn(format="%.3f")})
     if st.button(confirm_label, type="primary", key=f"{key}_apply"):
-        state.asbuilt = [
-            AsBuiltLine(
-                raw_desc=str(r["Description"]).strip(),
-                qty=float(r["Built qty"] or 0),
-                uom=UoM.from_str(r["UoM"]),
-                segment=str(r["Segment"]).strip() or None,
-                # confirming a reviewed PDF row makes it trusted
-                confidence="confirmed" if confirm else str(r["Confidence"]),
-            )
-            for _, r in edited.iterrows()
-            if str(r["Description"]).strip() and str(r["Description"]).strip().lower() != "nan"
-        ]
+        rows = []
+        for _, r in edited.iterrows():
+            desc = str(r["Description"]).strip()
+            if not desc or desc.lower() == "nan":
+                continue
+            rows.append(AsBuiltLine(
+                raw_desc=desc, qty=float(r["Built qty"] or 0),
+                uom=UoM.from_str(r["UoM"]), code=str(r["Code"]).strip() or None,
+                confidence="confirmed" if confirm else str(r["Confidence"])))
+        state.asbuilt = rows
+        # coded lines carry their rate code straight through — seed the crosswalk so
+        # they don't need description matching later.
+        for a in rows:
+            if a.code:
+                state.resolved[a.raw_desc] = a.code
         if confirm:
             from ui.db import log_action
             state.done.add("asbuilt")
             log_action("confirm_asbuilt", "asbuilt", actor=state.reviewer or None,
-                       detail={"source": state.asbuilt_source,
-                               "units": len(state.asbuilt)})
+                       detail={"source": state.asbuilt_source, "units": len(rows)})
         st.rerun()

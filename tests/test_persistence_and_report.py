@@ -102,3 +102,20 @@ def test_pdf_summary_includes_resolutions_when_given(golden_asbuilt, golden_invo
     text = _pdf_text(build_pdf_summary(rows, totals, "Cycle 04", resolutions=res))
     assert "Resolution" in text
     assert "HOLD" in text
+
+
+def test_pdf_summary_escapes_markup_in_free_text():
+    # rate-sheet descriptions can contain < / & (e.g. 14"<VAULT ≤30"); reportlab
+    # would read those as markup and raise without escaping.
+    from recon.models import Flag, ReconRow, Severity, UoM
+    row = ReconRow(
+        code="BHF-30T", description='14"<VAULT ≤30" & vault', uom=UoM.EA,
+        built_qty=1, billed_qty=2, contract_price=10.0, billed_price=10.0,
+        est_qty=None,
+        flags=[Flag("qty_over", Severity.CRITICAL, "billed 2 > built 1 <x> & <y>")])
+    totals = cycle_totals([row], retainage_pct=10.0)
+    pdf = build_pdf_summary(
+        [row], totals, "Job <A> & B - Cycle 1",
+        resolutions={"BHF-30T": {"status": "hold", "note": "check <this> & that"}},
+        override={"reason": "pay now <x> & y", "by": "LC", "at": "2026-07-28"})
+    assert pdf[:4] == b"%PDF"                 # built a real PDF instead of raising

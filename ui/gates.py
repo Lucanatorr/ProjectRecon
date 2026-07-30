@@ -1,7 +1,7 @@
 """Pre-export validation gates (SDD §9).
 
 "Validation gates prevent finalizing on bad inputs: unresolved crosswalk items,
-unconfirmed OCR rows, or a missing bid schedule each block a clean export (with an
+unconfirmed parsed rows, or a missing bid schedule each block a clean export (with an
 explicit override that is logged)." Critical flags must also carry a reviewer
 decision (SDD §7.3).
 
@@ -27,7 +27,7 @@ def evaluate_gates(state) -> list[Gate]:
 
     n_units = len(state.contract)
     n_review = _crosswalk_review_count(state)
-    unconfirmed = [a for a in state.asbuilt if a.confidence in ("pdf", "ocr")]
+    unconfirmed = [a for a in state.asbuilt if a.confidence == "annot"]
     open_criticals = unresolved_criticals(state)
 
     return [

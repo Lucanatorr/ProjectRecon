@@ -39,7 +39,6 @@ pydantic_core==2.46.4
 pydeck==0.9.3
 Pygments==2.20.0
 pypdfium2==5.12.1
-pytesseract==0.3.13
 pytest==9.1.1
 python-dateutil==2.9.0.post0
 python-multipart==0.0.32
