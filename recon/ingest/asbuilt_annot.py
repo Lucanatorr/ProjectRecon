@@ -123,16 +123,31 @@ def _mst_type(tail: int) -> ItemType:
 
 def _conduit_type(n_ways: int | None, size: str | None, method: str) -> ItemType:
     """Conduit/bore keyed by way-count, size, and install method. The code mirrors
-    the rate sheet's own spelling, e.g. ``BM60(2)(1.25) P`` / ``BM60-(1.25)DP``."""
+    the rate sheet's own spelling, e.g. ``BM60(2)(1.25) P`` / ``BM60-(1.25)DP``.
+
+    **Bores price by pipe count, and the two units are far apart** — a single pipe
+    is the base ``BM60-(1.25)DP``; two or more pipes pulled back together bill the
+    ``BM60-(1.25)DPD Dual`` adder. An explicit DPD/Dual marking always wins, since
+    the contractor is stating it outright.
+    """
     n = n_ways or 1
     sz = size or "1.25"
-    label = {"P": "plow", "T": "open trench", "DP": "directional bore",
-             "MB": "missile bore", "DPD": "directional bore, dual",
-             "TD": "joint trench"}.get(method, method)
-    code = (f"BM60-({sz}){method}" if method in ("DP", "MB", "DPD") and n == 1
-            else f"BM60({n})({sz}) {method}")
+
+    if method in ("DP", "DPD"):
+        dual = method == "DPD" or n > 1
+        code = f"BM60-({sz})DPD Dual" if dual else f"BM60-({sz})DP"
+        label = (f"Bore {sz}\" — dual / multi-pipe adder" if dual
+                 else f"Bore {sz}\" — single pipe, directional")
+        return ItemType(f"bm60_{sz}_{'DPD' if dual else 'DP'}", label, UoM.FT, code)
+
+    if method == "MB":
+        return ItemType(f"bm60_{sz}_MB", f"Bore {sz}\" — missile", UoM.FT,
+                        f"BM60-({sz})MB")
+
+    label = {"P": "plow", "T": "open trench", "TD": "joint trench"}.get(method, method)
     return ItemType(f"bm60_{n}_{sz}_{method}",
-                    f"Conduit {n}×{sz}\" — {label}", UoM.FT, code)
+                    f"Conduit {n}×{sz}\" — {label}", UoM.FT,
+                    f"BM60({n})({sz}) {method}")
 
 
 # --------------------------------------------------------------------------- #

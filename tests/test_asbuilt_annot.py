@@ -129,15 +129,44 @@ def test_buried_fiber_in_conduit_vs_existing_duct():
 
 
 def test_conduit_way_count_size_and_method():
-    r = _parse('BM60(2-1.25") | Plow=636\'', 'BM60(3-1.25") | Bore=153\'')
-    assert r.qty["bm60_2_1.25_P"] == 636
-    assert r.qty["bm60_3_1.25_DP"] == 153        # a bare "Bore" is always DP
+    r = _parse('BM60(2-1.25") | Plow=636\'')
+    assert r.qty["bm60_2_1.25_P"] == 636         # plow keeps its way count
     assert r.code["bm60_2_1.25_P"] == "BM60(2)(1.25) P"
+
+
+def test_single_pipe_bore_is_the_base_dp_unit():
+    # pricing-critical: one 1.25" pipe bills the base bore unit
+    r = _parse('BM60(1-1.25") | Bore=53\'', "BM60-(1.25)DP-460'")
+    assert r.code["bm60_1.25_DP"] == "BM60-(1.25)DP"
+    assert r.qty["bm60_1.25_DP"] == 513          # 53 + 460
+    assert "bm60_1.25_DPD" not in r.qty
+
+
+def test_multi_pipe_bore_is_the_dual_adder_unit():
+    # anything other than a single pipe bills the DPD Dual adder
+    r = _parse('BM60(2-1.25") | Bore=240\'', 'BM60(3-1.25") | Bore=153\'',
+               'BM60(4-1.25") | Bore=236\'')
+    assert r.code["bm60_1.25_DPD"] == "BM60-(1.25)DPD Dual"
+    assert r.qty["bm60_1.25_DPD"] == 629         # 240 + 153 + 236
+    assert "bm60_1.25_DP" not in r.qty
+
+
+def test_explicit_dual_marking_wins_over_way_count():
+    r = _parse("BM60-(1.25)DPD-DUAL-212'", "BM60 (1.25) DP Dual 116'")
+    assert r.qty["bm60_1.25_DPD"] == 328
+    assert "bm60_1.25_DP" not in r.qty
+
+
+def test_base_and_adder_bill_separately_when_written_that_way():
+    # a contractor writing both lines gets both units (real PON 9 comment)
+    r = _parse("BM60-(1.25)DP-212' | BM60-(1.25)DPD-DUAL-212' | 5-BM81")
+    assert r.qty["bm60_1.25_DP"] == 212
+    assert r.qty["bm60_1.25_DPD"] == 212
 
 
 def test_conduit_spec_and_footage_can_span_two_tokens():
     r = _parse('BM60(4-1.25") | Bore=236\'')
-    assert r.qty["bm60_4_1.25_DP"] == 236
+    assert r.qty["bm60_1.25_DPD"] == 236
 
 
 def test_markers_and_tracer_wire():

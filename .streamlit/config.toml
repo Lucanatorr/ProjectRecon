@@ -13,3 +13,4 @@ toolbarMode = "minimal"
 
 [server]
 runOnSave = true
+maxUploadSize = 1000
