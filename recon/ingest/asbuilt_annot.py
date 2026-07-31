@@ -284,11 +284,13 @@ _BDO = re.compile(r"^BDO\s*\(?\s*([SML])\s*\)?", re.I)
 _HST = re.compile(r"HST\s*(\d+)\s*-\s*(\d+)", re.I)
 _DIMS = re.compile(r"(\d+)\s*[xX]\s*(\d+)(?:\s*[xX]\s*\d+)?")
 _BM60 = re.compile(r"BM60", re.I)
-# way-count then size: (2-1.25") · (3)(1.25") · ((3)(1.25") · (3)1.25)
-# the size always carries a decimal or an inch mark, which keeps "(3)" from being
-# read as a size when the forms nest.
-_WAYS = re.compile(r"\(*\s*(\d+)\s*\)?\s*[-(]?\s*(\d+\.\d+|\d+\s*(?=\"))\s*\"?")
-_SIZE_ONLY = re.compile(r"\(\s*(\d+(?:\.\d+)?)\s*\"?\s*\)")
+# way-count then size: (2-1.25") · (3)(1.25") · ((3)(1.25") · (3)1.25) · (1)(4")
+# The count must be a whole number NOT followed by a decimal point, so the "1" of a
+# bare "(1.25\")" can never be read as a way count; the size always carries either a
+# decimal or an inch mark.
+_WAYS = re.compile(
+    r"\(\s*(\d+)(?!\s*[.\d])\s*\)?\s*[-(]?\s*(\d+\.\d+|\d+(?=\s*[\"']))")
+_SIZE_ONLY = re.compile(r"\(\s*(\d+(?:\.\d+)?)\s*[\"']?\s*\)")
 _FT_CEIL = 1200          # bare number below this = feet; at/above = station id
 _MULT_CEIL = 8
 
@@ -315,22 +317,51 @@ def parse_annotations(annotations: list[Annotation]) -> AnnotParse:
     return res
 
 
+@dataclass
+class _Ctx:
+    """Mutable per-comment state while its tokens are walked."""
+    page: int
+    has_gaa: bool = False                  # explicit anchor → a DG adds none
+    base_bore_ft: set = field(default_factory=set)   # explicit single-pipe bores
+    seg_kind: str | None = None            # 'A' | 'B'
+    seg_count: int | None = None
+    seg_ie: bool = False                   # buried into existing duct
+    # a BM60 spec often sits on its own line with the footage on the next
+    # ("BM60(2-1.25\")" then "Bore=636'") — carried forward within the comment
+    pending_conduit: tuple | None = None
+    # aerial span footage is held back until the whole comment is read, because an
+    # OLASH token replaces it (coordinator's rule)
+    pending_afo: list = field(default_factory=list)
+    olash_ft: float | None = None
+    olash_seen: bool = False
+
+
+def _base_bore_footages(toks: list[str]) -> set:
+    """Footages of explicit single-pipe bore tokens in this comment. A derived base
+    must not double-count one the contractor already wrote out."""
+    out = set()
+    for tok in toks:
+        t = _canon(tok)
+        if not _BM60.search(t) or _conduit_method(t) != "DP":
+            continue
+        ways, _ = _conduit_spec(t)
+        if (ways or 1) != 1:
+            continue
+        val = _conduit_ft(t)
+        if val:
+            out.add(val)
+    return out
+
+
 def _parse_comment(toks: list[str], page: int, res: AnnotParse) -> None:
     """One comment: walk its tokens, tracking the current cable segment so span
     footage attaches to the right cable count/kind."""
-    # an explicit anchor anywhere in the comment means a DG must not add its own
-    has_gaa = any(("AFO.GAA" in _canon(t)) or ("ANCHOR" in _canon(t)) for t in toks)
-    seg_kind: str | None = None        # 'A' | 'B'
-    seg_count: int | None = None
-    seg_ie = False                     # buried into existing duct
-    # a BM60 spec often sits on its own line with the footage on the next
-    # ("BM60(2-1.25\")" then "Bore=636'") — carry it forward within the comment
-    pending_conduit: tuple[int | None, str | None] | None = None
-    # aerial span footage is held back until the whole comment is read, because an
-    # OLASH token replaces it (coordinator's rule)
-    pending_afo: list[tuple[int | None, float]] = []
-    olash_ft: float | None = None
-    olash_seen = False
+    ctx = _Ctx(
+        page=page,
+        has_gaa=any(("AFO.GAA" in _canon(t)) or ("ANCHOR" in _canon(t))
+                    for t in toks),
+        base_bore_ft=_base_bore_footages(toks),
+    )
 
     for tok in toks:
         t = _canon(tok)
@@ -339,41 +370,44 @@ def _parse_comment(toks: list[str], page: int, res: AnnotParse) -> None:
 
         mc = _CABLE.match(t)
         if mc:
-            seg_kind = mc.group(1).upper()
-            seg_count = int(mc.group(2))
-            seg_ie = bool(re.search(r"\.\s*IE\b|\bIE\b", t))
+            ctx.seg_kind = mc.group(1).upper()
+            ctx.seg_count = int(mc.group(2))
+            ctx.seg_ie = bool(re.search(r"\.\s*IE\b|\bIE\b", t))
             ft = _FT.search(t) or _TRAIL.search(t)
             if ft:                                   # cable label carrying footage
                 val = float(ft.group(1).replace(",", ""))
-                if seg_kind == "A":
-                    pending_afo.append((seg_count, val))
+                if ctx.seg_kind == "A":
+                    ctx.pending_afo.append((ctx.seg_count, val))
                 else:
-                    res.add(_bfo_type(seg_count, seg_ie), val)
+                    res.add(_bfo_type(ctx.seg_count, ctx.seg_ie), val)
             continue
 
-        (handled, olash_ft, olash_seen, pending_afo,
-         pending_conduit) = _classify(
-            t, tok, page, res, seg_kind, seg_count, seg_ie,
-            has_gaa, pending_afo, olash_ft, olash_seen, pending_conduit)
-        if not handled:
+        if not _classify(t, tok, res, ctx):
             res.unresolved.append((page, tok))
 
     # settle the aerial footage: OLASH replaces placement on the same comment
-    if olash_seen:
-        ft = olash_ft if olash_ft else sum(v for _, v in pending_afo)
+    if ctx.olash_seen:
+        ft = ctx.olash_ft if ctx.olash_ft else sum(v for _, v in ctx.pending_afo)
         if ft:
             res.add(ITEM_TYPES["olash"], ft)
     else:
-        for count, val in pending_afo:
+        for count, val in ctx.pending_afo:
             res.add(_afo_sl_type(count), val)
 
 
-def _classify(t, raw, page, res, seg_kind, seg_count, seg_ie,
-              has_gaa, pending_afo, olash_ft, olash_seen, pending_conduit=None):
-    """Classify one token. Returns
-    (handled, olash_ft, olash_seen, pending_afo, pending_conduit)."""
-    ret = lambda ok: (ok, olash_ft, olash_seen, pending_afo,  # noqa: E731
-                      pending_conduit)
+def _add_conduit(res: AnnotParse, ctx: _Ctx, ways, size, method, val: float) -> None:
+    """Record a conduit/bore run. A multi-pipe bore also carries the base bore
+    unit — unless the contractor already wrote that base out at the same footage."""
+    it = _conduit_type(ways, size, method)
+    res.add(it, val)
+    if it.key.endswith("_DPD") and val not in ctx.base_bore_ft:
+        res.add(_conduit_type(1, size, "DP"), val)
+
+
+def _classify(t: str, raw: str, res: AnnotParse, ctx: _Ctx) -> bool:
+    """Classify one token, updating ``res`` and ``ctx``. Returns whether it was
+    recognised (False sends it to the review grid)."""
+    page = ctx.page
     n, body = _qty_prefix(t)
     b = _canon(body)
     ft_m = _FT.search(t) or _TRAIL.search(t)
@@ -382,104 +416,110 @@ def _classify(t, raw, page, res, seg_kind, seg_count, seg_ie,
     # --- notes / non-billable ------------------------------------------------
     if re.fullmatch(r"\d{1,2}\s*/\s*\d{1,2}(\s*/\s*\d{2,4})?", b):   # a date
         res.notes.append((page, raw))
-        return ret(True)
+        return True
     if any(h in t for h in _NOTE_HINTS) and not _BM60.search(t):
         res.notes.append((page, raw))
-        return ret(True)
+        return True
     if b.startswith("PM2A"):                       # not a contract unit
-        return ret(True)
+        return True
     if re.match(r"^PIPE\b", b):                    # reference — conduit bills BM60
-        return ret(True)
+        return True
     if re.fullmatch(r"[_\-—–.\s]+", b):            # separator / doodle
-        return ret(True)
+        return True
 
     # --- overlash / relash ---------------------------------------------------
     if "AFO.OLASH" in t or re.match(r"^OLASH\b", b):
-        return (True, (ft if ft else olash_ft), True, pending_afo, pending_conduit)
+        ctx.olash_seen = True
+        if ft:
+            ctx.olash_ft = ft
+        return True
     if "AFO.RELASH" in t:
         res.add(ITEM_TYPES["relash"], ft or 0)
-        return ret(True)
+        return True
 
     # --- aerial span footage / coils / risers --------------------------------
     if re.match(r"^AFO\b", b) or re.match(r"^AFO\.SL\b", b):
         if "COIL" in b:                             # 1 AFO.S per coil, ft ignored
             res.add(ITEM_TYPES["coil"], 1)
-            return ret(True)
+            return True
         if "UP POLE" in b or "DOWN POLE" in b:      # riser footage — part of span
-            return ret(True)
+            return True
         if "AFO.S" == b or b.startswith("AFO.S "):
             res.add(ITEM_TYPES["coil"], n)
-            return ret(True)
+            return True
         if "RTD" in b:
             res.add(ITEM_TYPES["afo_rtd"], ft or 0)
-            return ret(True)
+            return True
         for key, item in (("AFO.BOND", "bond"), ("AFO.BANDING", "banding"),
                           ("AFO.GAA", "anchor"), ("AFO.GG", "down_guy"),
                           ("AFO.TRAN2", "transfer"), ("AFO.EYE", "eye")):
             if key in b:
                 res.add(ITEM_TYPES[item], n)
-                return ret(True)
+                return True
         val = ft if ft is not None else _trailing_qty(b)
         if val is not None:
-            return (True, olash_ft, olash_seen,
-                    pending_afo + [(seg_count, val)], pending_conduit)
-        return ret(True)                            # bare "AFO 48" label
+            ctx.pending_afo.append((ctx.seg_count, val))
+        return True                                 # bare "AFO 48" label
 
     # --- buried fiber --------------------------------------------------------
     if re.match(r"^BFO\b", b):
         if "RTD" in b:
             res.add(ITEM_TYPES["bfo_rtd"], ft or 0)
-            return ret(True)
+            return True
         val = ft if ft is not None else _trailing_qty(b)
         if val is not None:
-            res.add(_bfo_type(seg_count, seg_ie), val)
-        return ret(True)
+            res.add(_bfo_type(ctx.seg_count, ctx.seg_ie), val)
+        return True
 
     # --- conduit / bore ------------------------------------------------------
     if _BM60.search(t):
         method = _conduit_method(t)
         ways, size = _conduit_spec(t)
-        val = ft if ft is not None else _trailing_qty(t)
+        val = _conduit_ft(t)
         if val:
-            res.add(_conduit_type(ways, size, method), val)
-            return (True, olash_ft, olash_seen, pending_afo, None)
+            _add_conduit(res, ctx, ways, size, method, val)
+            ctx.pending_conduit = None
+            return True
         # spec only — footage is on a following token ("Bore=636'")
-        return (True, olash_ft, olash_seen, pending_afo, (ways, size))
+        ctx.pending_conduit = (ways, size)
+        return True
     # a Plow/Bore/Trench footage line completing the conduit spec above it
     if re.match(r"^(PLOW|BORE|TRENCH|DP|DPD|MB)\b", b) and (ft or _trailing_qty(b)):
         val = ft or _trailing_qty(b)
-        ways, size = pending_conduit or (None, None)
-        res.add(_conduit_type(ways, size, _conduit_method(t)), val)
-        return (True, olash_ft, olash_seen, pending_afo, None)
+        ways, size = ctx.pending_conduit or (None, None)
+        _add_conduit(res, ctx, ways, size, _conduit_method(t), val)
+        ctx.pending_conduit = None
+        return True
 
     # --- MST / RTD -----------------------------------------------------------
     if b.startswith("HST"):
         m = _HST.search(t)
         if m:
             res.add(_mst_type(int(m.group(2))), 1)
-            return ret(True)
-        return ret(False)
+            return True
+        return False
     if "RTD" in b:
-        item = "bfo_rtd" if seg_kind == "B" or b.startswith("BFO") else "afo_rtd"
+        item = ("bfo_rtd" if ctx.seg_kind == "B" or b.startswith("BFO")
+                else "afo_rtd")
         if ft:
             res.add(ITEM_TYPES[item], ft)
-            return ret(True)
+            return True
         # "RTD 4-750" / "RTD 4150" — port count + tail bracket, billed per unit
         m = re.search(r"RTD\D*(\d)\s*-?\s*(\d{3,4})\b", b)
         if m:
             res.add(_mst_type(int(m.group(2))), 1)
-            return ret(True)
-        return ret(False)                           # H:/T: only → review
+            return True
+        return False                                # H:/T: only → review
 
     # --- guys / anchors ------------------------------------------------------
     if b in ("DG", "DG / GG", "DG/GG") or re.match(r"^DG\b", b):
         res.add(ITEM_TYPES["down_guy"], n)
-        if not has_gaa:                             # DG implies its anchor
+        if not ctx.has_gaa:                         # DG implies its anchor
             res.add(ITEM_TYPES["anchor"], n)
-        return ret(True)
+        return True
     if "ANCHOR" in b:
         res.add(ITEM_TYPES["anchor"], n)
-        return ret(True)
+        return True
 
     # --- structures ----------------------------------------------------------
     m = _BHF.match(b)
@@ -487,61 +527,74 @@ def _classify(t, raw, page, res, seg_kind, seg_count, seg_ie,
         size, tier = m.group(1), (m.group(2) or "")
         res.add(ItemType(f"handhole_{size}{tier}", f"Handhole/vault BHF-{size}{tier}",
                          UoM.EA, f"BHF-{size}{tier}"), n)
-        return ret(True)
+        return True
     m = _BDO.match(b)
     if m:
         sz = m.group(1).upper()
         res.add(ItemType(f"pedestal_{sz}", f"Pedestal BDO({sz})", UoM.EA,
                          f"BDO({sz})"), n)
-        return ret(True)
+        return True
     m = _DIMS.search(t)                              # 17x30x24 → BHF bracket
     if m and not re.search(r"BM60", t):
         code = _BHF_DIMS.get((int(m.group(1)), int(m.group(2))))
         if code:
             res.add(ItemType(f"handhole_{code}", f"Handhole/vault {code}",
                              UoM.EA, code), 1)
-            return ret(True)
-        return ret(False)                            # unknown dims → review
+            return True
+        return False                                 # unknown dims → review
 
     for pat, item in ((r"^BM81\b", "riser_guard"), (r"^BM53\b", "marker_post"),
                       (r"^BM55A\b", "locate_disk"), (r"^BM55\b", "locate_post"),
                       (r"^BM2\b", "ground_rod"), (r"^BMHD\b", "handdig")):
         if re.match(pat, b):
             res.add(ITEM_TYPES[item], n)
-            return ret(True)
+            return True
     if re.match(r"^BM90\b", b):
         res.add(ITEM_TYPES["tracer_wire"], ft or _trailing_qty(b) or 0)
-        return ret(True)
+        return True
     if "SPLICE" in b:                                # aerial/buried closure varies
-        return ret(False)
+        return False
 
     if re.match(r"^TRANS?[12]\b", b):                # bare TRAN2 / TRANS2
-        res.add(ITEM_TYPES["transfer" if b.rstrip('S').endswith("2")
-                           else "transfer"], n)
-        return ret(True)
+        res.add(ITEM_TYPES["transfer"], n)
+        return True
 
     # --- stations / geometry (positional reference, not billable) ------------
     head = re.split(r"[\s\-:=]", b)[0]
     if head in _STATION_WORDS:
-        return ret(True)
+        return True
     # a bare number continues the current span: with a foot mark it is always
     # footage; without one, only a small value is (larger is a station id).
     bare = re.fullmatch(r"([\d,]+)\s*('?)", b)
-    if bare and seg_kind:
+    if bare and ctx.seg_kind:
         val = float(bare.group(1).replace(",", ""))
-        is_ft = bool(bare.group(2)) or val < _FT_CEIL
-        if is_ft:
-            if seg_kind == "A":
-                return (True, olash_ft, olash_seen,
-                        pending_afo + [(seg_count, val)], pending_conduit)
-            res.add(_bfo_type(seg_count, seg_ie), val)
-            return ret(True)
-        return ret(True)                             # station id
+        if bool(bare.group(2)) or val < _FT_CEIL:    # footage
+            if ctx.seg_kind == "A":
+                ctx.pending_afo.append((ctx.seg_count, val))
+            else:
+                res.add(_bfo_type(ctx.seg_count, ctx.seg_ie), val)
+        return True                                  # else a station id
     if _BARE.match(b):
-        return ret(True)                             # station id / footage marker
+        return True                                  # station id / footage marker
     if not b:
-        return ret(True)
-    return ret(False)
+        return True
+    return False
+
+
+def _conduit_ft(t: str) -> float | None:
+    """Footage of a conduit token, read from the text *after* the size spec — a size
+    written with a foot mark (``BM60(1.25')DP - 782'``) must never be mistaken for
+    the run's footage. Some contractors put the footage first (``250' BM60-(1.25)
+    DP``), so fall back to the text before the code."""
+    tail = t[t.rfind(")") + 1:] if ")" in t else t
+    m = (_TRAIL.search(tail) or _FT.search(tail)
+         or re.search(r"(\d[\d,]*)\s*['\"]?\s*$", tail))
+    if m:
+        return float(m.group(1).replace(",", ""))
+    idx = t.upper().find("BM")
+    head = t[:idx] if idx > 0 else ""
+    m = _FT.search(head) or re.search(r"(\d[\d,]*)", head)
+    return float(m.group(1).replace(",", "")) if m else None
 
 
 def _trailing_qty(text: str) -> float | None:

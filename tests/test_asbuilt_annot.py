@@ -142,31 +142,60 @@ def test_single_pipe_bore_is_the_base_dp_unit():
     assert "bm60_1.25_DPD" not in r.qty
 
 
-def test_multi_pipe_bore_is_the_dual_adder_unit():
-    # anything other than a single pipe bills the DPD Dual adder
+def test_multi_pipe_bore_bills_the_base_plus_the_dual_adder():
+    # a multi-pipe bore carries the base bore unit *and* the adder
     r = _parse('BM60(2-1.25") | Bore=240\'', 'BM60(3-1.25") | Bore=153\'',
                'BM60(4-1.25") | Bore=236\'')
     assert r.code["bm60_1.25_DPD"] == "BM60-(1.25)DPD Dual"
+    assert r.code["bm60_1.25_DP"] == "BM60-(1.25)DP"
     assert r.qty["bm60_1.25_DPD"] == 629         # 240 + 153 + 236
-    assert "bm60_1.25_DP" not in r.qty
+    assert r.qty["bm60_1.25_DP"] == 629          # base at the same footage
 
 
 def test_explicit_dual_marking_wins_over_way_count():
     r = _parse("BM60-(1.25)DPD-DUAL-212'", "BM60 (1.25) DP Dual 116'")
     assert r.qty["bm60_1.25_DPD"] == 328
-    assert "bm60_1.25_DP" not in r.qty
+    assert r.qty["bm60_1.25_DP"] == 328          # base derived for each
 
 
-def test_base_and_adder_bill_separately_when_written_that_way():
-    # a contractor writing both lines gets both units (real PON 9 comment)
+def test_base_is_not_double_counted_when_the_comment_writes_it_out():
+    # real PON 9 comment: the contractor billed base + adder as two lines, so the
+    # adder must not derive a second base on top of it
     r = _parse("BM60-(1.25)DP-212' | BM60-(1.25)DPD-DUAL-212' | 5-BM81")
-    assert r.qty["bm60_1.25_DP"] == 212
+    assert r.qty["bm60_1.25_DP"] == 212          # not 424
     assert r.qty["bm60_1.25_DPD"] == 212
+
+
+def test_a_separate_bore_still_gets_its_own_base():
+    # an explicit base at one footage must not suppress the base of a different bore
+    r = _parse("BM60-(1.25)DP-212' | BM60(3-1.25\") Bore=153'")
+    assert r.qty["bm60_1.25_DP"] == 365          # 212 explicit + 153 derived
+    assert r.qty["bm60_1.25_DPD"] == 153
+
+
+def test_bare_size_is_not_split_into_a_way_count():
+    # BM60(1.25")DP is ONE 1.25" pipe — the decimal must not read as count 1 size .25
+    r = _parse('BM60(1.25")DP - 254\'', "BM60(1.25')DP - 782'")
+    assert r.qty["bm60_1.25_DP"] == 1036         # 254 + 782, both single-pipe
+    assert "bm60_1.25_DPD" not in r.qty
+
+
+def test_footage_written_before_the_code_is_still_read():
+    # PON 9 style: "250' BM60-(1.25) DP"
+    r = _parse("250' BM60-(1.25) DP", "202' BM60-(1.25) DP")
+    assert r.qty["bm60_1.25_DP"] == 452
+
+
+def test_railroad_and_four_inch_bores_keep_their_size():
+    r = _parse('BM60(1)(4") DP RR - 236\'', 'BM60(4")DP SDR11 Rail Road - 128\'')
+    assert r.code["bm60_4_DP"] == "BM60-(4)DP"
+    assert r.qty["bm60_4_DP"] == 364
 
 
 def test_conduit_spec_and_footage_can_span_two_tokens():
     r = _parse('BM60(4-1.25") | Bore=236\'')
     assert r.qty["bm60_1.25_DPD"] == 236
+    assert r.qty["bm60_1.25_DP"] == 236
 
 
 def test_markers_and_tracer_wire():
