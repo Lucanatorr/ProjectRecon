@@ -128,7 +128,7 @@ def render(state: WizardState) -> None:
             data=build_workbook(rows, totals, label, override=override),
             file_name="reconciliation_report.xlsx", type="primary",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True, disabled=locked,
+            width='stretch', disabled=locked,
             on_click=_log_export("workbook"))
     with d2:
         st.download_button(
@@ -137,7 +137,7 @@ def render(state: WizardState) -> None:
                                    resolutions=state.resolutions or None,
                                    override=override),
             file_name="reconciliation_summary.pdf", mime="application/pdf",
-            use_container_width=True, disabled=locked,
+            width='stretch', disabled=locked,
             on_click=_log_export("pdf"))
     if locked:
         st.caption("Downloads unlock once the checks above pass — or with a "

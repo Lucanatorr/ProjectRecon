@@ -126,7 +126,7 @@ def _uploader(state: WizardState) -> None:
     with c2:
         st.write("")
         st.write("")
-        if st.button("Load sample tally", use_container_width=True, key="ab_sample") \
+        if st.button("Load sample tally", width='stretch', key="ab_sample") \
                 and SAMPLE.exists():
             with loading_bar("Loading sample tally…") as step:
                 step(40, "Summing by unit…")
@@ -211,7 +211,7 @@ def _editor(state: WizardState, *, key: str, confirm_label: str,
         "UoM": a.uom.value if a.uom else "", "Confidence": a.confidence,
     } for a in state.asbuilt])
     edited = st.data_editor(
-        df, use_container_width=True, hide_index=True, key=key, num_rows="dynamic",
+        df, width='stretch', hide_index=True, key=key, num_rows="dynamic",
         disabled=["Confidence"],
         column_config={"Built qty": st.column_config.NumberColumn(format="%.3f")})
     if st.button(confirm_label, type="primary", key=f"{key}_apply"):

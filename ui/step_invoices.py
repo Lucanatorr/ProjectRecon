@@ -70,7 +70,7 @@ def render(state: WizardState) -> None:
     with c2:
         st.write("")
         st.write("")
-        if st.button("Load xlsx", use_container_width=True, key="inv_sample") \
+        if st.button("Load xlsx", width='stretch', key="inv_sample") \
                 and SAMPLE.exists():
             with loading_bar("Loading sample invoice…") as step:
                 step(45, "Parsing invoice…")
@@ -81,7 +81,7 @@ def render(state: WizardState) -> None:
     with c3:
         st.write("")
         st.write("")
-        if st.button("Load PDF", use_container_width=True, key="inv_pdf_sample") \
+        if st.button("Load PDF", width='stretch', key="inv_pdf_sample") \
                 and PDF_SAMPLE.exists():
             with loading_bar("Loading sample PDF invoice…") as step:
                 step(45, "Extracting table…")
@@ -123,7 +123,7 @@ def render(state: WizardState) -> None:
                 "Invoice": l.invoice_id, "Description": l.raw_desc, "Qty": l.qty,
                 "Unit price": l.unit_price, "Amount": l.amount,
             } for l in state.invoices])
-            st.dataframe(df, use_container_width=True, hide_index=True)
+            st.dataframe(df, width='stretch', hide_index=True)
         if st.button("Confirm invoices", type="primary"):
             state.done.add("invoices")
             st.success("Invoices confirmed.")

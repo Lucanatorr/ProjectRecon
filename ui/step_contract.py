@@ -53,7 +53,7 @@ def render(state: WizardState) -> None:
 
     c1, c2 = st.columns([1, 4])
     with c1:
-        if st.button("Confirm bid schedule", type="primary", use_container_width=True):
+        if st.button("Confirm bid schedule", type="primary", width='stretch'):
             state.done.add("contract")
             st.success("Confirmed.")
 
@@ -67,7 +67,7 @@ def render(state: WizardState) -> None:
         with cc2:
             st.write("")
             st.write("")
-            if st.button("Load sample CO", use_container_width=True, key="co_sample") \
+            if st.button("Load sample CO", width='stretch', key="co_sample") \
                     and CO_SAMPLE.exists():
                 _apply_co(state, CO_SAMPLE)
                 st.rerun()
@@ -101,7 +101,7 @@ def _uploader(state: WizardState, compact: bool = False) -> None:
     with c2:
         st.write("")
         st.write("")
-        if st.button("Load sample", use_container_width=True, key="c_sample") \
+        if st.button("Load sample", width='stretch', key="c_sample") \
                 and SAMPLE.exists():
             with loading_bar("Loading sample schedule…") as step:
                 step(40, "Parsing bid schedule…")
@@ -141,7 +141,7 @@ def _editor(state: WizardState) -> None:
         "Unit price": ci.unit_price, "Est. qty": ci.est_qty,
         "CO": ci.is_change_order,
     } for ci in state.contract])
-    edited = st.data_editor(df, use_container_width=True, hide_index=True,
+    edited = st.data_editor(df, width='stretch', hide_index=True,
                            key="contract_editor", num_rows="dynamic")
     if st.button("Apply edits", key="apply_contract"):
         state.contract = _items_from_df(edited)
