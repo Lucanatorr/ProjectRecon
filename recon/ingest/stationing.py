@@ -81,25 +81,31 @@ class StationingReport:
         return head + (f" — {n} do not." if n else ".")
 
 
-def _states_footage_ahead(ordered: list) -> bool:
+def _states_footage_ahead(ordered: list, coil_ft) -> bool:
     """Whether this route writes a span's footage as the run *arriving* at its
     station rather than the run leaving it. Decided by whichever way the route's
     own chain reconciles more often."""
     behind = ahead = 0
     for a, b in zip(ordered, ordered[1:]):
         gap = b.station - a.station
-        behind += gap == a.span_ft + a.extra_ft
-        ahead += gap == b.span_ft + b.extra_ft
+        inside = coil_ft(a.station, b.station)
+        behind += gap == a.span_ft + a.extra_ft + inside
+        ahead += gap == b.span_ft + b.extra_ft + inside
     return ahead > behind
 
 
-def check_stationing(span_records: list) -> StationingReport:
+def check_stationing(span_records: list, coil_marks: list | None = None
+                     ) -> StationingReport:
     """Walk each route in station order and compare every adjacent pair's gap
-    against the footage written on the comments."""
+    against the footage written on the comments, plus any coil sitting inside it."""
     report = StationingReport()
     routes: dict = {}
     for s in span_records:
         routes.setdefault(s.route, []).append(s)
+
+    coils: dict = {}
+    for c in (coil_marks or []):
+        coils.setdefault(c.route, []).append(c)
 
     for route, spans in routes.items():
         # de-dupe identical records (the same span drawn on two sheets) and order
@@ -110,16 +116,23 @@ def check_stationing(span_records: list) -> StationingReport:
             report.unverifiable += len(ordered)
             continue
 
-        ahead = _states_footage_ahead(ordered)
+        marks = coils.get(route, ())
+
+        def coil_ft(lo: int, hi: int, _m=marks) -> float:
+            """Coil / riser footage sitting inside this gap — a coil belongs to
+            whichever gap contains the station it is listed at."""
+            return sum(c.ft for c in _m if lo < c.station <= hi)
+
+        ahead = _states_footage_ahead(ordered, coil_ft)
         for a, b in zip(ordered, ordered[1:]):
             if abs(b.page - a.page) > _MAX_PAGE_JUMP:
                 report.unverifiable += 1            # route left the sheet run
                 continue
             # exactly one span owns the gap — whichever end this route states its
-            # footage from — and that span's footage has to close it on its own
+            # footage from — plus any coil standing in it
             owner = b if ahead else a
             gap = float(b.station - a.station)
-            stated = owner.span_ft + owner.extra_ft
+            stated = owner.span_ft + owner.extra_ft + coil_ft(a.station, b.station)
             report.checks.append(SpanCheck(
                 route=route, page=owner.page, station_from=a.station,
                 station_to=b.station, gap=gap, stated=stated, ok=(gap == stated),

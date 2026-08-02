@@ -264,6 +264,15 @@ class SpanRecord:
 
 
 @dataclass
+class CoilMark:
+    """A coil / riser and the station it is listed at. Coils consume stationing, so
+    the cross-check has to know *where* one sits, not just that a span had one."""
+    route: tuple
+    station: int
+    ft: float
+
+
+@dataclass
 class AnnotParse:
     qty: dict[str, float] = field(default_factory=dict)
     label: dict[str, str] = field(default_factory=dict)
@@ -275,6 +284,7 @@ class AnnotParse:
     notes: list[tuple[int, str]] = field(default_factory=list)
     unresolved: list[tuple[int, str]] = field(default_factory=list)
     span_records: list = field(default_factory=list)   # list[SpanRecord]
+    coil_marks: list = field(default_factory=list)     # list[CoilMark]
 
     def add(self, it: ItemType, amount: float) -> None:
         if not amount:
@@ -349,7 +359,9 @@ class _Ctx:
     # stationing cross-check: the span's start station and the footage on it
     sta: int | None = None
     span_ft: float | None = None
-    extra_ft: float = 0.0                  # coils / risers also consume stationing
+    extra_ft: float = 0.0                  # coils / risers with no station of their own
+    # a coil's footage waits here until the station it is listed at is read
+    pending_coil_ft: float = 0.0
     raw: str = ""
     # a BM60 spec often sits on its own line with the footage on the next
     # ("BM60(2-1.25\")" then "Bore=636'") — carried forward within the comment
@@ -379,15 +391,17 @@ def _base_bore_footages(toks: list[str]) -> set:
 
 
 def _flush_span(res: AnnotParse, ctx: _Ctx) -> None:
-    """Bank the aerial span currently being read for the stationing cross-check."""
+    """Bank the aerial span currently being read for the stationing cross-check. A
+    coil with no station of its own falls back to the span it was written on."""
+    extra = ctx.extra_ft + ctx.pending_coil_ft
     if ctx.seg_kind == "A" and ctx.sta is not None and ctx.span_ft:
         res.span_records.append(SpanRecord(
             page=ctx.page, route=(str(ctx.seg_count or ""), ctx.seg_route),
-            station=ctx.sta, span_ft=ctx.span_ft, extra_ft=ctx.extra_ft,
-            raw=ctx.raw))
+            station=ctx.sta, span_ft=ctx.span_ft, extra_ft=extra, raw=ctx.raw))
     ctx.sta = None
     ctx.span_ft = None
     ctx.extra_ft = 0.0
+    ctx.pending_coil_ft = 0.0
 
 
 def _parse_comment(toks: list[str], page: int, res: AnnotParse) -> None:
@@ -486,11 +500,12 @@ def _classify(t: str, raw: str, res: AnnotParse, ctx: _Ctx) -> bool:
     if re.match(r"^AFO\b", b) or re.match(r"^AFO\.SL\b", b):
         if "COIL" in b:                             # 1 AFO.S per coil, ft ignored
             res.add(ITEM_TYPES["coil"], 1)
-            # the coil still consumes stationing, so the cross-check must know it
-            ctx.extra_ft += ft if ft is not None else (_trailing_qty(b) or 0)
+            # it still consumes stationing — hold its footage until the station it
+            # is listed at is read, so the cross-check can place it
+            ctx.pending_coil_ft += ft if ft is not None else (_trailing_qty(b) or 0)
             return True
         if "UP POLE" in b or "DOWN POLE" in b:      # riser footage — part of span
-            ctx.extra_ft += ft if ft is not None else (_trailing_qty(b) or 0)
+            ctx.pending_coil_ft += ft if ft is not None else (_trailing_qty(b) or 0)
             return True
         if "AFO.S" == b or b.startswith("AFO.S "):
             res.add(ITEM_TYPES["coil"], n)
@@ -625,8 +640,15 @@ def _classify(t: str, raw: str, res: AnnotParse, ctx: _Ctx) -> bool:
                     ctx.span_ft = val
             else:
                 res.add(_bfo_type(ctx.seg_count, ctx.seg_ie), val)
-        elif ctx.sta is None:                        # the span's start station
-            ctx.sta = int(val)
+        else:                                        # a station id
+            # a coil is anchored to the station it is listed at
+            if ctx.pending_coil_ft:
+                res.coil_marks.append(CoilMark(
+                    route=(str(ctx.seg_count or ""), ctx.seg_route),
+                    station=int(val), ft=ctx.pending_coil_ft))
+                ctx.pending_coil_ft = 0.0
+            if ctx.sta is None:
+                ctx.sta = int(val)
         return True
     if _BARE.match(b):
         return True                                  # station id / footage marker

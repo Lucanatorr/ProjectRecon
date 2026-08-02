@@ -127,8 +127,27 @@ def test_span_records_are_captured_from_comments():
     assert not check_stationing(res.span_records).failures
 
 
-def test_coil_footage_is_recorded_as_extra_not_as_placement():
+def test_a_coil_is_anchored_to_the_station_it_is_listed_at():
+    # 19514 + 150 coil = 19664 (the coil's own station), + 364 span = 20028
     res = parse_annotations(
         [_ann("AFO 48 (D) | 19514 | AFO - 364 | AFO Coil - 150 | 19664")])
     rec = res.span_records[0]
-    assert rec.span_ft == 364 and rec.extra_ft == 150
+    assert rec.span_ft == 364 and rec.extra_ft == 0     # not a blob on the span
+    assert len(res.coil_marks) == 1
+    mark = res.coil_marks[0]
+    assert mark.station == 19664 and mark.ft == 150 and mark.route == ("48", "D")
+
+
+def test_a_coil_counts_only_in_the_gap_that_contains_its_station():
+    from recon.ingest.asbuilt_annot import CoilMark
+    spans = [_span(1000, 100), _span(1250, 100), _span(1350, 100)]
+    coil = CoilMark(route=("48", "F"), station=1100, ft=150)   # sits in gap 1 only
+    r = check_stationing(spans, [coil])
+    assert not r.failures            # 100+150 closes gap 1; 100 closes gap 2
+
+
+def test_an_unanchored_coil_still_falls_back_to_its_span():
+    # no station follows the coil, so it stays with the span it was written on
+    res = parse_annotations([_ann("AFO 48 (D) | 19514 | AFO - 364 | AFO Coil - 150")])
+    assert not res.coil_marks
+    assert res.span_records[0].extra_ft == 150
