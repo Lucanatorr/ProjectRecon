@@ -1,0 +1,111 @@
+"""Cross-checking as-built span footages against the drawing's fiber sequentials.
+
+The station a span starts at is a checksum on its footage: the distance to the next
+span equals the cable placed plus anything else that consumed stationing.
+"""
+from __future__ import annotations
+
+from recon.ingest.asbuilt_annot import (
+    Annotation,
+    SpanRecord,
+    parse_annotations,
+)
+from recon.ingest.stationing import check_stationing
+
+
+def _span(station, ft, extra=0.0, page=1, route=("48", "F")):
+    return SpanRecord(page=page, route=route, station=station, span_ft=ft,
+                      extra_ft=extra)
+
+
+def _ann(pipe: str, page: int = 1) -> Annotation:
+    return Annotation(page=page, text="\r".join(p.strip() for p in pipe.split("|")))
+
+
+# --- the arithmetic ------------------------------------------------------- #
+def test_consecutive_spans_that_match_their_stationing_pass():
+    # 19670 -> 19984 is 314 ft, and the span says 314
+    r = check_stationing([_span(19670, 314), _span(19984, 314)])
+    assert r.checked == 1 and r.passed == 1 and not r.failures
+
+
+def test_a_coil_consumes_stationing_and_still_reconciles():
+    # 19514 + 150 coil + 364 span = 20028
+    r = check_stationing([_span(19514, 364, extra=150), _span(20028, 354)])
+    assert r.passed == 1 and not r.failures
+
+
+def test_a_footage_that_disagrees_is_flagged_exactly():
+    # gap is 372 but the comment claims 392 — no tolerance, so this must fail
+    r = check_stationing([_span(25966, 392), _span(26338, 392)])
+    assert len(r.failures) == 1
+    f = r.failures[0]
+    assert f.gap == 372 and f.stated == 392 and f.delta == 20
+
+
+def test_off_by_one_is_still_a_failure():
+    r = check_stationing([_span(15222, 193), _span(15620, 206)])
+    assert len(r.failures) == 1          # 398 gap vs 399 stated — exact match only
+
+
+def test_routes_are_checked_independently():
+    # same stations on two routes must not be compared against each other
+    spans = [_span(1000, 100, route=("48", "F")), _span(1100, 100, route=("48", "F")),
+             _span(1000, 250, route=("144", "D")), _span(1250, 250, route=("144", "D"))]
+    r = check_stationing(spans)
+    assert r.checked == 2 and not r.failures
+
+
+def test_a_distant_page_jump_is_unverifiable_not_a_failure():
+    r = check_stationing([_span(1000, 100, page=2), _span(5000, 100, page=40)])
+    assert r.checked == 0 and r.unverifiable == 1
+
+
+def test_a_lone_span_cannot_be_checked():
+    r = check_stationing([_span(1000, 100)])
+    assert r.checked == 0 and r.unverifiable == 1
+
+
+def test_duplicate_records_do_not_create_a_phantom_gap():
+    # the same span drawn on two sheets must not compare against itself
+    r = check_stationing([_span(1000, 100), _span(1000, 100, page=2),
+                          _span(1100, 100)])
+    assert r.checked == 1 and not r.failures
+
+
+# --- report ---------------------------------------------------------------- #
+def test_report_summarises_pass_and_fail():
+    r = check_stationing([_span(1000, 100), _span(1100, 100), _span(1500, 100)])
+    assert r.checked == 2 and len(r.failures) == 1
+    assert "1 of 2 spans reconcile" in r.summary()
+    assert "1 do not" in r.summary()
+
+
+def test_route_label_reads_naturally():
+    r = check_stationing([_span(1000, 100, route=("144", "D")),
+                          _span(1100, 100, route=("144", "D"))])
+    assert r.checks[0].route_label == "144ct distribution"
+
+
+def test_empty_input_is_handled():
+    r = check_stationing([])
+    assert r.checked == 0 and "No span stationing" in r.summary()
+
+
+# --- end to end from real comment shorthand -------------------------------- #
+def test_span_records_are_captured_from_comments():
+    # the real PON 9 chain: each span's footage is the gap to the next station
+    anns = [_ann("AFO 48 (F) | 19670 | AFO - 314 | 1-AFO.BOND", page=4),
+            _ann("AFO 48 (F) | 19984 | AFO - 314 | 1-AFO.BOND", page=4)]
+    res = parse_annotations(anns)
+    assert len(res.span_records) == 2
+    rec = res.span_records[0]
+    assert rec.station == 19670 and rec.span_ft == 314 and rec.route == ("48", "F")
+    assert not check_stationing(res.span_records).failures
+
+
+def test_coil_footage_is_recorded_as_extra_not_as_placement():
+    res = parse_annotations(
+        [_ann("AFO 48 (D) | 19514 | AFO - 364 | AFO Coil - 150 | 19664")])
+    rec = res.span_records[0]
+    assert rec.span_ft == 364 and rec.extra_ft == 150

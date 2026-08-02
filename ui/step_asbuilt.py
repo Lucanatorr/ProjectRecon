@@ -52,6 +52,7 @@ def render(state: WizardState) -> None:
 
     for w in state.asbuilt_warnings:
         st.warning(w)
+    _stationing_panel()
     _unresolved_panel()
 
     if not state.asbuilt:
@@ -102,6 +103,44 @@ def _render_review_grid(state: WizardState) -> None:
             confirm=True)
 
 
+def _stationing_panel() -> None:
+    """Cross-check of the stated span footages against the drawing's fiber
+    sequentials. Any span whose footage doesn't close its stationing is listed —
+    exact match, no tolerance."""
+    rep = st.session_state.get("_annot_stationing")
+    if not rep or not rep.checked:
+        return
+    fails = rep.failures
+    label = (f"Stationing cross-check · {len(fails)} to review" if fails
+             else f"Stationing cross-check · all {rep.checked} spans reconcile")
+    with st.expander(label, expanded=bool(fails)):
+        st.caption("Each span's footage is checked against the distance between "
+                   "fiber sequentials on the drawing (span + coils/risers). A "
+                   "mismatch means a mis-stated footage, a missing span, or a "
+                   "double-counted one.")
+        (st.warning if fails else st.success)(rep.summary())
+        if not fails:
+            return
+        headers = [("Page", ""), ("Route", ""), ("Stationing", ""),
+                   ("Built per stationing", "r"), ("Stated", "r"), ("Diff", "r")]
+        body = []
+        for c in fails:
+            body.append([
+                td(f"p{c.page}"),
+                td(c.route_label),
+                td(f"{c.station_from:,} → {c.station_to:,}", "code"),
+                td(f"{c.gap:,.0f} ft", "r num"),
+                td(f"{c.stated:,.0f} ft", "r num"),
+                f'<td class="r num" style="color:var(--critical)">'
+                f'{c.delta:+,.0f} ft</td>',
+            ])
+        st.markdown(table_html(headers, body), unsafe_allow_html=True)
+        st.markdown('<div class="hint">A large difference usually means the route '
+                    'leaves the sheet and returns (the spans between aren\'t '
+                    'adjacent); a small one usually means a mis-keyed footage.'
+                    '</div>', unsafe_allow_html=True)
+
+
 def _unresolved_panel() -> None:
     """Comment tokens that couldn't be auto-classified (conduit / pedestal / splice
     vary) — listed so the coordinator can add them by hand in the grid."""
@@ -135,6 +174,7 @@ def _uploader(state: WizardState) -> None:
             state.asbuilt_source = SAMPLE.name
             state.asbuilt_warnings = []
             st.session_state.pop("_annot_unresolved", None)
+            st.session_state.pop("_annot_stationing", None)
             _log_asbuilt_load(state, SAMPLE.name)
             state.flash = f"Loaded {len(state.asbuilt)} built units."
             st.rerun()
@@ -152,6 +192,7 @@ def _uploader(state: WizardState) -> None:
                 state.asbuilt_source = up.name
                 state.asbuilt_warnings = []
                 st.session_state.pop("_annot_unresolved", None)
+                st.session_state.pop("_annot_stationing", None)
                 _log_asbuilt_load(state, up.name)
                 state.flash = f"Loaded {len(state.asbuilt)} built units."
             st.rerun()
@@ -163,16 +204,21 @@ def _ingest_pdf_annotations(state: WizardState, path, name: str) -> None:
     """Parse a construction PDF's comment annotations into as-built quantities,
     matched against the already-loaded bid schedule; unmatched items fall to the
     crosswalk."""
+    from recon.ingest.stationing import check_stationing
+
     with loading_bar("Reading PDF comments…") as step:
-        step(30, "Extracting comments…")
+        step(25, "Extracting comments…")
         res = parse_annotations(extract_annotations(path))
-        step(70, "Matching to the bid schedule…")
+        step(55, "Checking footages against stationing…")
+        stationing = check_stationing(res.span_records)
+        step(80, "Matching to the bid schedule…")
         lines, resolved = to_asbuilt_lines(res, state.contract, state.aliases)
         state.asbuilt = lines
         step(100, "Done")
     state.asbuilt_source = name
     state.resolved.update(resolved)              # confident contract matches
     st.session_state["_annot_unresolved"] = res.unresolved
+    st.session_state["_annot_stationing"] = stationing
 
     warnings = []
     if not state.contract:
@@ -182,6 +228,10 @@ def _ingest_pdf_annotations(state: WizardState, path, name: str) -> None:
     if state.contract and unmatched:
         warnings.append(f"{unmatched} of {len(lines)} line(s) didn't match the bid "
                         "schedule — resolve them in the Crosswalk step.")
+    if stationing.failures:
+        warnings.append(
+            f"{len(stationing.failures)} span footage(s) don't reconcile against "
+            "the drawing's stationing — see the cross-check below.")
     if res.excluded:
         warnings.append(f"{len(res.excluded)} span(s) marked “DID NOT BUILD” were "
                         "excluded.")
@@ -190,18 +240,21 @@ def _ingest_pdf_annotations(state: WizardState, path, name: str) -> None:
                         "pedestal / splice) and need manual entry — see the list "
                         "below, then add them in the grid.")
     state.asbuilt_warnings = warnings
-    _log_asbuilt_load(state, name)
+    _log_asbuilt_load(state, name, stationing=stationing)
     state.flash = (f"Parsed {len(lines)} quantity line(s) from {res.records} PDF "
                    f"comment(s); {len(resolved)} matched the bid schedule.")
 
 
-def _log_asbuilt_load(state: WizardState, source: str) -> None:
+def _log_asbuilt_load(state: WizardState, source: str, stationing=None) -> None:
     from ui.db import log_action
     kinds = sorted({a.confidence for a in state.asbuilt})
+    detail = {"source": source, "units": len(state.asbuilt), "confidence": kinds,
+              "warnings": len(state.asbuilt_warnings)}
+    if stationing is not None and stationing.checked:
+        detail["stationing_checked"] = stationing.checked
+        detail["stationing_failed"] = len(stationing.failures)
     log_action("load_asbuilt", "asbuilt", actor=state.reviewer or None,
-               detail={"source": source, "units": len(state.asbuilt),
-                       "confidence": kinds,
-                       "warnings": len(state.asbuilt_warnings)})
+               detail=detail)
 
 
 def _editor(state: WizardState, *, key: str, confirm_label: str,
