@@ -251,50 +251,6 @@ def _qty_prefix(token: str) -> tuple[int, str]:
 #  parse result
 # --------------------------------------------------------------------------- #
 @dataclass
-class SpanRecord:
-    """One aerial span exactly as written — where it starts (its fiber sequential /
-    station), how much cable it places, and what else on it consumes stationing
-    (coils, up/down-pole risers). Feeds the stationing cross-check."""
-    page: int
-    route: tuple                    # (cable count, 'F' | 'D' | '')
-    station: int
-    span_ft: float
-    extra_ft: float = 0.0
-    raw: str = ""
-    # Where the main line actually resumes. A coil carries the route on to a second
-    # station, so the next span measures from there; an MST tail is a branch and
-    # leaves the main line at the span's own station.
-    station_end: int | None = None
-
-    @property
-    def end(self) -> int:
-        return self.station if self.station_end is None else self.station_end
-
-
-@dataclass
-class BuriedRun:
-    """One buried run as written: where the bore enters and leaves, the fiber pulled
-    and the conduit placed. The conduit reaches from the previous run's exit to this
-    run's entry, which makes the stationing a checksum on the pipe footage."""
-    page: int
-    route: tuple                    # (cable count, 'F' | 'D' | '')
-    in_sta: int | None = None
-    out_sta: int | None = None
-    bfo_ft: float | None = None
-    pipe_ft: float | None = None
-    raw: str = ""
-
-
-@dataclass
-class CoilMark:
-    """A coil / riser and the station it is listed at. Coils consume stationing, so
-    the cross-check has to know *where* one sits, not just that a span had one."""
-    route: tuple
-    station: int
-    ft: float
-
-
-@dataclass
 class AnnotParse:
     qty: dict[str, float] = field(default_factory=dict)
     label: dict[str, str] = field(default_factory=dict)
@@ -305,15 +261,6 @@ class AnnotParse:
     excluded: list[tuple[int, str]] = field(default_factory=list)
     notes: list[tuple[int, str]] = field(default_factory=list)
     unresolved: list[tuple[int, str]] = field(default_factory=list)
-    span_records: list = field(default_factory=list)   # list[SpanRecord]
-    coil_marks: list = field(default_factory=list)     # list[CoilMark]
-    buried_runs: list = field(default_factory=list)    # list[BuriedRun]
-    # every sequential seen on each route, whether or not a span was written at it —
-    # these are the chain's nodes, and a route steps through all of them
-    route_stations: dict = field(default_factory=dict)
-
-    def note_station(self, route: tuple, station: int) -> None:
-        self.route_stations.setdefault(route, set()).add(station)
 
     def add(self, it: ItemType, amount: float) -> None:
         if not amount:
@@ -329,22 +276,12 @@ class AnnotParse:
 #  patterns
 # --------------------------------------------------------------------------- #
 _CABLE = re.compile(r"^([AB])FO[\s.]*0*(\d+)\s*F?\b", re.I)      # AFO 48 (F), BFO.96.I
-# The route a span belongs to: (F)eeder / (D)istribution, the written-out forms, or
-# a bare trailing tag ("AFO 144 F"). The tag must be separated from the count —
-# "AFO 288F" is a 288-fiber cable, not the feeder.
-_ROUTE = re.compile(
-    r"\(\s*([FD])\s*\)|\b(TRUNK|DIST|FEEDER)\b|\s([FD])\s*$", re.I)
 # Fiber counts a cable can actually be. A number outside this set after "AFO" is a
 # footage ("AFO 444"), not a new cable segment.
 _FIBER_COUNTS = frozenset((12, 24, 36, 48, 72, 96, 144, 216, 288, 432, 576))
-# a station written on the header itself: "AFO 48 (D) 26984"
-_HDR_STATION = re.compile(r"(?<!\d)(\d{4,6})(?!\d)")
 # "AFO 48 Coil - 150" / "AFO 96 up pole - 24'" open like a cable header but are a
-# coil or riser, whose footage is consumed stationing — never placed cable.
+# coil or riser, whose footage is already inside the span — never placed cable.
 _NOT_A_HEADER = re.compile(r"\b(COIL|SNOW\s*SHOE|UP\s*POLE|DOWN\s*POLE)\b", re.I)
-# a coil written with no length ("AFO S"): its length is the distance between the
-# two stations on the comment, so it stays pending until the second one is read
-_COIL_UNSIZED = -1.0
 _FT = re.compile(r"(\d[\d,]*)\s*'")
 _TRAIL = re.compile(r"[-=]\s*(\d[\d,]*)\s*'?\s*$")
 _BARE = re.compile(r"^(\d[\d,]*)\s*(MID|TOP|TAIL|UG|BOTTOM)?$", re.I)
@@ -395,21 +332,6 @@ class _Ctx:
     seg_kind: str | None = None            # 'A' | 'B'
     seg_count: int | None = None
     seg_ie: bool = False                   # buried into existing duct
-    seg_route: str = ""                    # 'F' | 'D' — which route this span is on
-    # stationing cross-check: the span's start station and the footage on it
-    sta: int | None = None
-    sta2: int | None = None                # a second station written on the comment
-    sta_end: int | None = None             # where a coil carries the line on to
-    span_ft: float | None = None
-    extra_ft: float = 0.0                  # coils / risers with no station of their own
-    # a coil's footage waits here until the station it is listed at is read
-    pending_coil_ft: float = 0.0
-    # the buried run currently being read
-    in_sta: int | None = None
-    out_sta: int | None = None
-    bfo_ft: float | None = None
-    pipe_ft: float | None = None
-    raw: str = ""
     # a BM60 spec often sits on its own line with the footage on the next
     # ("BM60(2-1.25\")" then "Bore=636'") — carried forward within the comment
     pending_conduit: tuple | None = None
@@ -437,40 +359,6 @@ def _base_bore_footages(toks: list[str]) -> set:
     return out
 
 
-def _flush_span(res: AnnotParse, ctx: _Ctx) -> None:
-    """Bank the aerial span currently being read for the stationing cross-check. A
-    coil with no station of its own falls back to the span it was written on."""
-    pending = ctx.pending_coil_ft
-    if pending == _COIL_UNSIZED:
-        # "AFO S" with no length: the coil runs between the comment's two stations
-        pending = 0.0
-        if ctx.sta is not None and ctx.sta2 is not None:
-            res.coil_marks.append(CoilMark(
-                route=(str(ctx.seg_count or ""), ctx.seg_route),
-                station=max(ctx.sta, ctx.sta2), ft=abs(ctx.sta2 - ctx.sta)))
-            ctx.sta_end = ctx.sta2
-    extra = ctx.extra_ft + pending
-    if ctx.seg_kind == "A" and ctx.sta is not None and ctx.span_ft:
-        res.span_records.append(SpanRecord(
-            page=ctx.page, route=(str(ctx.seg_count or ""), ctx.seg_route),
-            station=ctx.sta, span_ft=ctx.span_ft, extra_ft=extra, raw=ctx.raw,
-            station_end=ctx.sta_end))
-    # bank the buried run too — its conduit is checked against the stationing
-    if ctx.seg_kind == "B" and (ctx.in_sta is not None or ctx.out_sta is not None):
-        res.buried_runs.append(BuriedRun(
-            page=ctx.page, route=(str(ctx.seg_count or ""), ctx.seg_route),
-            in_sta=ctx.in_sta, out_sta=ctx.out_sta, bfo_ft=ctx.bfo_ft,
-            pipe_ft=ctx.pipe_ft, raw=ctx.raw))
-    ctx.sta = None
-    ctx.sta2 = None
-    ctx.sta_end = None
-    ctx.span_ft = None
-    ctx.extra_ft = 0.0
-    ctx.pending_coil_ft = 0.0
-    ctx.in_sta = ctx.out_sta = None
-    ctx.bfo_ft = ctx.pipe_ft = None
-
-
 def _parse_comment(toks: list[str], page: int, res: AnnotParse) -> None:
     """One comment: walk its tokens, tracking the current cable segment so span
     footage attaches to the right cable count/kind."""
@@ -492,37 +380,20 @@ def _parse_comment(toks: list[str], page: int, res: AnnotParse) -> None:
         if mc and int(mc.group(2)) not in _FIBER_COUNTS and ctx.seg_kind:
             mc = None
         if mc and not _NOT_A_HEADER.search(t):
-            _flush_span(res, ctx)                    # a new header ends the last span
             ctx.seg_kind = mc.group(1).upper()
             ctx.seg_count = int(mc.group(2))
             ctx.seg_ie = bool(re.search(r"\.\s*IE\b|\bIE\b", t))
-            rm = _ROUTE.search(t)
-            if rm:
-                tag = rm.group(1) or rm.group(2) or rm.group(3)
-                ctx.seg_route = tag[0].upper()
-            ctx.raw = tok
             ft = _FT.search(t) or _TRAIL.search(t)
             if ft:                                   # cable label carrying footage
                 val = float(ft.group(1).replace(",", ""))
                 if ctx.seg_kind == "A":
                     ctx.pending_afo.append((ctx.seg_count, val))
-                    ctx.span_ft = val
                 else:
                     res.add(_bfo_type(ctx.seg_count, ctx.seg_ie), val)
-            else:
-                # the station can be written on the header: "AFO 48 (D) 26984"
-                after = t[mc.end():]
-                sm = _HDR_STATION.search(after)
-                if sm:
-                    ctx.sta = int(sm.group(1))
-                    res.note_station((str(ctx.seg_count or ""), ctx.seg_route),
-                                     ctx.sta)
             continue
 
         if not _classify(t, tok, res, ctx):
             res.unresolved.append((page, tok))
-
-    _flush_span(res, ctx)
 
     # settle the aerial footage: OLASH replaces placement on the same comment
     if ctx.olash_seen:
@@ -562,8 +433,6 @@ def _classify(t: str, raw: str, res: AnnotParse, ctx: _Ctx) -> bool:
     if b.startswith("PM2A"):                       # not a contract unit
         return True
     if re.match(r"^PIPE\b", b):                    # reference — conduit bills BM60
-        if ft is not None:                         # but it checks the stationing
-            ctx.pipe_ft = ft
         return True
     if re.fullmatch(r"[_\-—–.\s]+", b):            # separator / doodle
         return True
@@ -582,19 +451,11 @@ def _classify(t: str, raw: str, res: AnnotParse, ctx: _Ctx) -> bool:
     if re.match(r"^AFO\b", b) or re.match(r"^AFO\.SL\b", b):
         if "COIL" in b:                             # 1 AFO.S per coil, ft ignored
             res.add(ITEM_TYPES["coil"], 1)
-            # it still consumes stationing — hold its footage until the station it
-            # is listed at is read, so the cross-check can place it
-            ctx.pending_coil_ft += ft if ft is not None else (_trailing_qty(b) or 0)
             return True
         if "UP POLE" in b or "DOWN POLE" in b:      # riser footage — part of span
-            ctx.pending_coil_ft += ft if ft is not None else (_trailing_qty(b) or 0)
             return True
         if "AFO.S" == b or b.startswith("AFO.S "):
             res.add(ITEM_TYPES["coil"], n)
-            # written without a length: the coil runs between the two stations on
-            # the comment, so mark it pending and measure it when the second is read
-            if ctx.pending_coil_ft == 0:
-                ctx.pending_coil_ft = _COIL_UNSIZED
             return True
         if "RTD" in b:
             res.add(ITEM_TYPES["afo_rtd"], ft or 0)
@@ -614,8 +475,6 @@ def _classify(t: str, raw: str, res: AnnotParse, ctx: _Ctx) -> bool:
                 val = float(m_bare.group(1).replace(",", ""))
         if val is not None:
             ctx.pending_afo.append((ctx.seg_count, val))
-            if ctx.span_ft is None:
-                ctx.span_ft = val                   # the span's placed footage
         return True                                 # bare "AFO 48" label
 
     # --- buried fiber --------------------------------------------------------
@@ -626,8 +485,6 @@ def _classify(t: str, raw: str, res: AnnotParse, ctx: _Ctx) -> bool:
         val = ft if ft is not None else _trailing_qty(b)
         if val is not None:
             res.add(_bfo_type(ctx.seg_count, ctx.seg_ie), val)
-            if ctx.bfo_ft is None:
-                ctx.bfo_ft = val
         return True
 
     # --- conduit / bore ------------------------------------------------------
@@ -721,14 +578,6 @@ def _classify(t: str, raw: str, res: AnnotParse, ctx: _Ctx) -> bool:
     # --- stations / geometry (positional reference, not billable) ------------
     head = re.split(r"[\s\-:=]", b)[0]
     if head in _STATION_WORDS:
-        # a buried run's entry and exit anchor the conduit it needs
-        m_sta = re.search(r"(\d[\d,]{2,})", t)
-        if m_sta and ctx.seg_kind == "B":
-            sta = int(m_sta.group(1).replace(",", ""))
-            if head == "IN" and ctx.in_sta is None:
-                ctx.in_sta = sta
-            elif head in ("OUT", "END") and ctx.out_sta is None:
-                ctx.out_sta = sta
         return True
     # a bare number continues the current span: with a foot mark it is always
     # footage; without one, only a small value is (larger is a station id).
@@ -738,29 +587,9 @@ def _classify(t: str, raw: str, res: AnnotParse, ctx: _Ctx) -> bool:
         if bool(bare.group(2)) or val < _FT_CEIL:    # footage
             if ctx.seg_kind == "A":
                 ctx.pending_afo.append((ctx.seg_count, val))
-                if ctx.span_ft is None:
-                    ctx.span_ft = val
             else:
                 res.add(_bfo_type(ctx.seg_count, ctx.seg_ie), val)
-        else:                                        # a station id
-            sta = int(val)
-            res.note_station((str(ctx.seg_count or ""), ctx.seg_route), sta)
-            # a coil is anchored to the station it is listed at, and carries the
-            # main line on to it — the next span measures from there
-            if ctx.pending_coil_ft:
-                ft_c = (abs(sta - ctx.sta) if ctx.pending_coil_ft == _COIL_UNSIZED
-                        and ctx.sta is not None else ctx.pending_coil_ft)
-                if ft_c and ft_c > 0:
-                    res.coil_marks.append(CoilMark(
-                        route=(str(ctx.seg_count or ""), ctx.seg_route),
-                        station=sta, ft=ft_c))
-                    ctx.sta_end = sta
-                ctx.pending_coil_ft = 0.0
-            if ctx.sta is None:
-                ctx.sta = sta
-            elif ctx.sta2 is None:
-                ctx.sta2 = sta
-        return True
+        return True                                  # else a station id
     if _BARE.match(b):
         return True                                  # station id / footage marker
     if not b:
