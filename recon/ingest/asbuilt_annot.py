@@ -261,6 +261,14 @@ class SpanRecord:
     span_ft: float
     extra_ft: float = 0.0
     raw: str = ""
+    # Where the main line actually resumes. A coil carries the route on to a second
+    # station, so the next span measures from there; an MST tail is a branch and
+    # leaves the main line at the span's own station.
+    station_end: int | None = None
+
+    @property
+    def end(self) -> int:
+        return self.station if self.station_end is None else self.station_end
 
 
 @dataclass
@@ -305,6 +313,9 @@ _ROUTE = re.compile(r"\(\s*([FD])\s*\)|\b(TRUNK|DIST|FEEDER)\b", re.I)
 # "AFO 48 Coil - 150" / "AFO 96 up pole - 24'" open like a cable header but are a
 # coil or riser, whose footage is consumed stationing — never placed cable.
 _NOT_A_HEADER = re.compile(r"\b(COIL|SNOW\s*SHOE|UP\s*POLE|DOWN\s*POLE)\b", re.I)
+# a coil written with no length ("AFO S"): its length is the distance between the
+# two stations on the comment, so it stays pending until the second one is read
+_COIL_UNSIZED = -1.0
 _FT = re.compile(r"(\d[\d,]*)\s*'")
 _TRAIL = re.compile(r"[-=]\s*(\d[\d,]*)\s*'?\s*$")
 _BARE = re.compile(r"^(\d[\d,]*)\s*(MID|TOP|TAIL|UG|BOTTOM)?$", re.I)
@@ -358,6 +369,8 @@ class _Ctx:
     seg_route: str = ""                    # 'F' | 'D' — which route this span is on
     # stationing cross-check: the span's start station and the footage on it
     sta: int | None = None
+    sta2: int | None = None                # a second station written on the comment
+    sta_end: int | None = None             # where a coil carries the line on to
     span_ft: float | None = None
     extra_ft: float = 0.0                  # coils / risers with no station of their own
     # a coil's footage waits here until the station it is listed at is read
@@ -393,12 +406,24 @@ def _base_bore_footages(toks: list[str]) -> set:
 def _flush_span(res: AnnotParse, ctx: _Ctx) -> None:
     """Bank the aerial span currently being read for the stationing cross-check. A
     coil with no station of its own falls back to the span it was written on."""
-    extra = ctx.extra_ft + ctx.pending_coil_ft
+    pending = ctx.pending_coil_ft
+    if pending == _COIL_UNSIZED:
+        # "AFO S" with no length: the coil runs between the comment's two stations
+        pending = 0.0
+        if ctx.sta is not None and ctx.sta2 is not None:
+            res.coil_marks.append(CoilMark(
+                route=(str(ctx.seg_count or ""), ctx.seg_route),
+                station=max(ctx.sta, ctx.sta2), ft=abs(ctx.sta2 - ctx.sta)))
+            ctx.sta_end = ctx.sta2
+    extra = ctx.extra_ft + pending
     if ctx.seg_kind == "A" and ctx.sta is not None and ctx.span_ft:
         res.span_records.append(SpanRecord(
             page=ctx.page, route=(str(ctx.seg_count or ""), ctx.seg_route),
-            station=ctx.sta, span_ft=ctx.span_ft, extra_ft=extra, raw=ctx.raw))
+            station=ctx.sta, span_ft=ctx.span_ft, extra_ft=extra, raw=ctx.raw,
+            station_end=ctx.sta_end))
     ctx.sta = None
+    ctx.sta2 = None
+    ctx.sta_end = None
     ctx.span_ft = None
     ctx.extra_ft = 0.0
     ctx.pending_coil_ft = 0.0
@@ -509,6 +534,10 @@ def _classify(t: str, raw: str, res: AnnotParse, ctx: _Ctx) -> bool:
             return True
         if "AFO.S" == b or b.startswith("AFO.S "):
             res.add(ITEM_TYPES["coil"], n)
+            # written without a length: the coil runs between the two stations on
+            # the comment, so mark it pending and measure it when the second is read
+            if ctx.pending_coil_ft == 0:
+                ctx.pending_coil_ft = _COIL_UNSIZED
             return True
         if "RTD" in b:
             res.add(ITEM_TYPES["afo_rtd"], ft or 0)
@@ -641,14 +670,22 @@ def _classify(t: str, raw: str, res: AnnotParse, ctx: _Ctx) -> bool:
             else:
                 res.add(_bfo_type(ctx.seg_count, ctx.seg_ie), val)
         else:                                        # a station id
-            # a coil is anchored to the station it is listed at
+            sta = int(val)
+            # a coil is anchored to the station it is listed at, and carries the
+            # main line on to it — the next span measures from there
             if ctx.pending_coil_ft:
-                res.coil_marks.append(CoilMark(
-                    route=(str(ctx.seg_count or ""), ctx.seg_route),
-                    station=int(val), ft=ctx.pending_coil_ft))
+                ft_c = (abs(sta - ctx.sta) if ctx.pending_coil_ft == _COIL_UNSIZED
+                        and ctx.sta is not None else ctx.pending_coil_ft)
+                if ft_c and ft_c > 0:
+                    res.coil_marks.append(CoilMark(
+                        route=(str(ctx.seg_count or ""), ctx.seg_route),
+                        station=sta, ft=ft_c))
+                    ctx.sta_end = sta
                 ctx.pending_coil_ft = 0.0
             if ctx.sta is None:
-                ctx.sta = int(val)
+                ctx.sta = sta
+            elif ctx.sta2 is None:
+                ctx.sta2 = sta
         return True
     if _BARE.match(b):
         return True                                  # station id / footage marker

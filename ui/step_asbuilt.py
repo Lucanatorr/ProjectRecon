@@ -21,7 +21,15 @@ from recon.ingest.tally import parse_tally
 from recon.models import AsBuiltLine, UoM
 from ui.progress import is_new_upload, loading_bar, show_flash, upload_signature
 from ui.state import WizardState
-from ui.theme import badge, card_close, card_open, lede, table_html, td
+from ui.theme import (
+    badge,
+    card_close,
+    card_open,
+    kpi_row_html,
+    lede,
+    table_html,
+    td,
+)
 from ui.uploads import save_upload
 
 SAMPLE = ROOT / "samples" / "AsBuilt_PhaseB_Tally.xlsx"
@@ -108,37 +116,59 @@ def _stationing_panel() -> None:
     sequentials. Any span whose footage doesn't close its stationing is listed —
     exact match, no tolerance."""
     rep = st.session_state.get("_annot_stationing")
-    if not rep or not rep.checked:
+    if not rep or not rep.verdicts:
         return
-    fails = rep.failures
-    label = (f"Stationing cross-check · {len(fails)} to review" if fails
-             else f"Stationing cross-check · all {rep.checked} spans reconcile")
-    with st.expander(label, expanded=bool(fails)):
-        st.caption("Each span's footage is checked against the distance between "
-                   "fiber sequentials on the drawing (span + coils/risers). A "
-                   "mismatch means a mis-stated footage, a missing span, or a "
-                   "double-counted one.")
-        (st.warning if fails else st.success)(rep.summary())
-        if not fails:
-            return
-        headers = [("Page", ""), ("Route", ""), ("Stationing", ""),
-                   ("Built per stationing", "r"), ("Stated", "r"), ("Diff", "r")]
-        body = []
-        for c in fails:
-            body.append([
-                td(f"p{c.page}"),
-                td(c.route_label),
-                td(f"{c.station_from:,} → {c.station_to:,}", "code"),
-                td(f"{c.gap:,.0f} ft", "r num"),
-                td(f"{c.stated:,.0f} ft", "r num"),
-                f'<td class="r num" style="color:var(--critical)">'
-                f'{c.delta:+,.0f} ft</td>',
-            ])
-        st.markdown(table_html(headers, body), unsafe_allow_html=True)
-        st.markdown('<div class="hint">A large difference usually means the route '
-                    'leaves the sheet and returns (the spans between aren\'t '
-                    'adjacent); a small one usually means a mis-keyed footage.'
-                    '</div>', unsafe_allow_html=True)
+    from recon.ingest.stationing import PLAUSIBLE, VERIFIED
+
+    n = len(rep.verdicts)
+    n_ok = len(rep.by_verdict(VERIFIED))
+    n_maybe = len(rep.by_verdict(PLAUSIBLE))
+    todo = rep.unverified
+    label = (f"Footage check · {len(todo)} span(s) to verify by hand" if todo
+             else f"Footage check · all {n} spans accounted for")
+    with st.expander(label, expanded=bool(todo)):
+        st.caption("Every span's footage is checked against the distance between "
+                   "fiber sequentials on the drawing — the same check done by hand, "
+                   "on every span.")
+        (st.warning if todo else st.success)(rep.summary())
+
+        st.markdown(kpi_row_html([
+            {"label": "Verified", "value": f"{n_ok}",
+             "sub": "footage closes its run exactly"},
+            {"label": "Consistent", "value": f"{n_maybe}",
+             "sub": "matches a run on the route"},
+            {"label": "Unaccounted", "value": f"{len(todo)}",
+             "sub": "check these first", "flag": True},
+        ]), unsafe_allow_html=True)
+
+        if todo:
+            st.markdown('<div class="card__t" style="margin-top:6px">Spans to '
+                        'verify</div>', unsafe_allow_html=True)
+            headers = [("Page", ""), ("Route", ""), ("Station", ""), ("Stated", "r")]
+            body = [[td(f"p{v.page}"), td(v.route_label), td(f"{v.station:,}", "code"),
+                     f'<td class="r num" style="color:var(--critical)">'
+                     f'{v.span_ft:,.0f} ft</td>'] for v in todo]
+            st.markdown(table_html(headers, body), unsafe_allow_html=True)
+            st.markdown('<div class="hint">These footages match no distance between '
+                        'any two sequentials on their route, so they are the most '
+                        'likely to be mis-stated.</div>', unsafe_allow_html=True)
+
+        if rep.failures:
+            with st.expander(f"Chain detail · {len(rep.failures)} run(s) that "
+                             "don't close"):
+                headers = [("Page", ""), ("Route", ""), ("Stationing", ""),
+                           ("Built", "r"), ("Stated", "r"), ("Diff", "r")]
+                body = [[td(f"p{c.page}"), td(c.route_label),
+                         td(f"{c.station_from:,} → {c.station_to:,}", "code"),
+                         td(f"{c.gap:,.0f} ft", "r num"),
+                         td(f"{c.stated:,.0f} ft", "r num"),
+                         f'<td class="r num" style="color:var(--critical)">'
+                         f'{c.delta:+,.0f} ft</td>'] for c in rep.failures]
+                st.markdown(table_html(headers, body), unsafe_allow_html=True)
+                st.markdown('<div class="hint">A run that doesn\'t close is often '
+                            'the route leaving the sheet and returning, rather than '
+                            'a bad footage — the list above is the sharper signal.'
+                            '</div>', unsafe_allow_html=True)
 
 
 def _unresolved_panel() -> None:
@@ -228,10 +258,10 @@ def _ingest_pdf_annotations(state: WizardState, path, name: str) -> None:
     if state.contract and unmatched:
         warnings.append(f"{unmatched} of {len(lines)} line(s) didn't match the bid "
                         "schedule — resolve them in the Crosswalk step.")
-    if stationing.failures:
+    if stationing.unverified:
         warnings.append(
-            f"{len(stationing.failures)} span footage(s) don't reconcile against "
-            "the drawing's stationing — see the cross-check below.")
+            f"{len(stationing.unverified)} span footage(s) match no distance on "
+            "their route — see the footage check below.")
     if res.excluded:
         warnings.append(f"{len(res.excluded)} span(s) marked “DID NOT BUILD” were "
                         "excluded.")
@@ -252,7 +282,7 @@ def _log_asbuilt_load(state: WizardState, source: str, stationing=None) -> None:
               "warnings": len(state.asbuilt_warnings)}
     if stationing is not None and stationing.checked:
         detail["stationing_checked"] = stationing.checked
-        detail["stationing_failed"] = len(stationing.failures)
+        detail["stationing_unverified"] = len(stationing.unverified)
     log_action("load_asbuilt", "asbuilt", actor=state.reviewer or None,
                detail=detail)
 

@@ -97,11 +97,23 @@ def test_duplicate_records_do_not_create_a_phantom_gap():
 
 
 # --- report ---------------------------------------------------------------- #
-def test_report_summarises_pass_and_fail():
+def test_report_summarises_verified_and_unaccounted():
     r = check_stationing([_span(1000, 100), _span(1100, 100), _span(1500, 100)])
     assert r.checked == 2 and len(r.failures) == 1
-    assert "1 of 2 spans reconcile" in r.summary()
-    assert "1 do not" in r.summary()
+    assert "1 of 3 span footages verified" in r.summary()
+    assert "1 match no distance" in r.summary()
+
+
+def test_every_span_gets_a_verdict():
+    from recon.ingest.stationing import PLAUSIBLE, UNVERIFIED, VERIFIED
+    # 1000->1100 closes exactly; 1100's 100 also equals a real 1100->1000 distance;
+    # 1500's 100 matches no distance between any two sequentials on the route
+    r = check_stationing([_span(1000, 100), _span(1100, 100), _span(1500, 100)])
+    by = {v.station: v.verdict for v in r.verdicts}
+    assert by[1000] == VERIFIED
+    assert by[1100] == PLAUSIBLE
+    assert by[1500] == UNVERIFIED
+    assert [v.station for v in r.unverified] == [1500]
 
 
 def test_route_label_reads_naturally():

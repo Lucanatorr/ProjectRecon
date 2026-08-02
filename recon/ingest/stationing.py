@@ -51,10 +51,46 @@ class SpanCheck:
         return f"{count}ct {name}".strip() if count else (name or "route")
 
 
+#: A span's footage closes its chain gap exactly — verified against the drawing.
+VERIFIED = "verified"
+#: It doesn't close the chain gap, but it does equal a real distance between two
+#: sequentials on its route — usually a break in the chain (a span drawn on another
+#: sheet), not a bad footage.
+PLAUSIBLE = "plausible"
+#: It matches no distance between any two sequentials on the route. Most likely a
+#: mis-stated footage — review these first.
+UNVERIFIED = "unverified"
+
+
+@dataclass
+class SpanVerdict:
+    """What the drawing says about one span's footage."""
+    page: int
+    route: tuple
+    station: int
+    span_ft: float
+    verdict: str
+
+    @property
+    def route_label(self) -> str:
+        count, tag = self.route
+        name = {"F": "feeder", "D": "distribution"}.get(tag, "")
+        return f"{count}ct {name}".strip() if count else (name or "route")
+
+
 @dataclass
 class StationingReport:
     checks: list = field(default_factory=list)      # list[SpanCheck]
     unverifiable: int = 0        # spans with no neighbour to check against
+    verdicts: list = field(default_factory=list)    # list[SpanVerdict]
+
+    def by_verdict(self, verdict: str) -> list:
+        return [v for v in self.verdicts if v.verdict == verdict]
+
+    @property
+    def unverified(self) -> list:
+        """The spans worth a supervisor's attention first."""
+        return self.by_verdict(UNVERIFIED)
 
     @property
     def checked(self) -> int:
@@ -73,25 +109,45 @@ class StationingReport:
         return (100.0 * self.passed / self.checked) if self.checked else 0.0
 
     def summary(self) -> str:
-        if not self.checked:
+        if not self.verdicts:
             return "No span stationing available to cross-check."
-        n = len(self.failures)
-        head = (f"{self.passed} of {self.checked} spans reconcile against the "
-                f"drawing's stationing")
-        return head + (f" — {n} do not." if n else ".")
+        n_v = len(self.by_verdict(VERIFIED))
+        n_u = len(self.unverified)
+        head = (f"{n_v} of {len(self.verdicts)} span footages verified against the "
+                f"drawing's sequentials")
+        return head + (f" — {n_u} match no distance on their route and need a look."
+                       if n_u else ", and none are unaccounted for.")
 
 
-def _states_footage_ahead(ordered: list, coil_ft) -> bool:
-    """Whether this route writes a span's footage as the run *arriving* at its
-    station rather than the run leaving it. Decided by whichever way the route's
-    own chain reconciles more often."""
-    behind = ahead = 0
-    for a, b in zip(ordered, ordered[1:]):
-        gap = b.station - a.station
-        inside = coil_ft(a.station, b.station)
-        behind += gap == a.span_ft + a.extra_ft + inside
-        ahead += gap == b.span_ft + b.extra_ft + inside
-    return ahead > behind
+# How a route writes its spans. Contractors are consistent within a route but not
+# between them, so the convention is read off each route's own chain:
+#   ahead    — the footage is the run *arriving* at the span's station, not leaving it
+#   coil_in  — a coil's length is already inside the span footage (the span is
+#              measured to where the coil ends) rather than added on top of it
+_CONVENTIONS = ((False, False), (True, False), (False, True), (True, True))
+
+
+def _measure(a, b, ahead: bool, coil_in: bool, coil_ft):
+    """The run between two spans and the footage claimed to have built it."""
+    if coil_in:
+        gap = float(b.end - a.end)
+        extra = 0.0
+    else:
+        gap = float(b.station - a.station)
+        extra = coil_ft(a.station, b.station)
+    owner = b if ahead else a
+    return gap, owner.span_ft + owner.extra_ft + extra, owner
+
+
+def _best_convention(ordered: list, coil_ft) -> tuple:
+    """The (ahead, coil_in) reading that this route's own chain supports best."""
+    best, best_hits = _CONVENTIONS[0], -1
+    for conv in _CONVENTIONS:
+        hits = sum(1 for a, b in zip(ordered, ordered[1:])
+                   if (lambda g, s, _o: g == s)(*_measure(a, b, *conv, coil_ft)))
+        if hits > best_hits:
+            best, best_hits = conv, hits
+    return best
 
 
 def check_stationing(span_records: list, coil_marks: list | None = None
@@ -106,6 +162,15 @@ def check_stationing(span_records: list, coil_marks: list | None = None
     coils: dict = {}
     for c in (coil_marks or []):
         coils.setdefault(c.route, []).append(c)
+
+    # every sequential known on each route, for the fallback plausibility check
+    stations: dict = {}
+    for s in span_records:
+        stations.setdefault(s.route, set()).update((s.station, s.end))
+    for c in (coil_marks or []):
+        stations.setdefault(c.route, set()).add(c.station)
+
+    verified: set = set()
 
     for route, spans in routes.items():
         # de-dupe identical records (the same span drawn on two sheets) and order
@@ -123,18 +188,32 @@ def check_stationing(span_records: list, coil_marks: list | None = None
             whichever gap contains the station it is listed at."""
             return sum(c.ft for c in _m if lo < c.station <= hi)
 
-        ahead = _states_footage_ahead(ordered, coil_ft)
+        conv = _best_convention(ordered, coil_ft)
         for a, b in zip(ordered, ordered[1:]):
             if abs(b.page - a.page) > _MAX_PAGE_JUMP:
                 report.unverifiable += 1            # route left the sheet run
                 continue
-            # exactly one span owns the gap — whichever end this route states its
-            # footage from — plus any coil standing in it
-            owner = b if ahead else a
-            gap = float(b.station - a.station)
-            stated = owner.span_ft + owner.extra_ft + coil_ft(a.station, b.station)
+            # exactly one span owns the run, read the way this route writes them,
+            # and its footage has to close it on its own
+            gap, stated, owner = _measure(a, b, *conv, coil_ft)
+            ok = gap == stated
             report.checks.append(SpanCheck(
                 route=route, page=owner.page, station_from=a.station,
-                station_to=b.station, gap=gap, stated=stated, ok=(gap == stated),
+                station_to=b.station, gap=gap, stated=stated, ok=ok,
                 delta=stated - gap, raw=owner.raw))
+            if ok:
+                verified.add((route, owner.station, owner.span_ft))
+
+    # every span gets a verdict, including those with no neighbour to chain to
+    for s in span_records:
+        key = (s.route, s.station, s.span_ft)
+        if key in verified:
+            verdict = VERIFIED
+        else:
+            known = sorted(stations.get(s.route, ()))
+            reachable = {abs(x - y) for y in (s.station, s.end) for x in known}
+            verdict = PLAUSIBLE if s.span_ft in reachable else UNVERIFIED
+        report.verdicts.append(SpanVerdict(
+            page=s.page, route=s.route, station=s.station, span_ft=s.span_ft,
+            verdict=verdict))
     return report
