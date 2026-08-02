@@ -208,3 +208,44 @@ def test_an_untagged_route_is_left_alone_when_no_cable_matches():
              _span(5000, 100, route=("144", "D"))]
     r = check_stationing(spans)
     assert ("48", "") in {v.route for v in r.verdicts}      # not folded into 144ct
+
+
+# --- buried runs: the conduit is checked the same way ---------------------- #
+def _run(in_sta, out_sta, pipe, page=1, route=("48", "D")):
+    from recon.ingest.asbuilt_annot import BuriedRun
+    return BuriedRun(page=page, route=route, in_sta=in_sta, out_sta=out_sta,
+                     pipe_ft=pipe)
+
+
+def test_conduit_reaches_from_the_previous_run_to_this_one():
+    from recon.ingest.stationing import check_conduit
+    # real PON 9 288ct chain: 26692 - 25686 = 1006, 27770 - 26768 = 1002
+    runs = [_run(25610, 25686, 1116), _run(26692, 26768, 1006),
+            _run(27770, 27846, 1002)]
+    checks = check_conduit(runs)
+    assert len(checks) == 2 and all(c.ok for c in checks)
+
+
+def test_a_conduit_footage_that_disagrees_is_flagged():
+    from recon.ingest.stationing import check_conduit
+    runs = [_run(25610, 25686, 1116), _run(26692, 26768, 900)]   # needs 1006
+    bad = [c for c in check_conduit(runs) if not c.ok]
+    assert len(bad) == 1 and bad[0].gap == 1006 and bad[0].delta == -106
+
+
+def test_a_descending_buried_route_is_read_the_other_way():
+    from recon.ingest.stationing import check_conduit
+    # real PON 11 Dist.: stationing descends, so the pipe runs the other way
+    runs = [_run(39602, 39466, 668), _run(38458, 38408, 1008), _run(37408, 37324, 1000)]
+    assert all(c.ok for c in check_conduit(runs))
+
+
+def test_buried_runs_reach_the_report():
+    res = parse_annotations([
+        _ann("BFO 288 (D) | In - 25610 | Tip - 25648 | Out - 25686 | "
+             "BFO - 1228 | Pipe - 1116", page=1),
+        _ann("BFO 288 (D) | In - 26692 | Out - 26768 | BFO - 1082 | Pipe - 1006",
+             page=2)])
+    assert len(res.buried_runs) == 2
+    rep = check_stationing(res.span_records, res.coil_marks, res.buried_runs)
+    assert len(rep.conduit) == 1 and not rep.conduit_failures

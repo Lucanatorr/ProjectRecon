@@ -83,6 +83,11 @@ class StationingReport:
     checks: list = field(default_factory=list)      # list[SpanCheck]
     unverifiable: int = 0        # spans with no neighbour to check against
     verdicts: list = field(default_factory=list)    # list[SpanVerdict]
+    conduit: list = field(default_factory=list)     # list[ConduitCheck]
+
+    @property
+    def conduit_failures(self) -> list:
+        return [c for c in self.conduit if not c.ok]
 
     def by_verdict(self, verdict: str) -> list:
         return [v for v in self.verdicts if v.verdict == verdict]
@@ -179,11 +184,75 @@ def _untagged_remap(span_records: list) -> dict:
     return remap
 
 
-def check_stationing(span_records: list, coil_marks: list | None = None
-                     ) -> StationingReport:
+@dataclass
+class ConduitCheck:
+    """One buried run's conduit, checked against the stationing. The pipe reaches
+    from where the previous run exited to where this one enters."""
+    route: tuple
+    page: int
+    station_from: int
+    station_to: int
+    gap: float                    # what the stationing says was placed
+    stated: float                 # what the comment claims
+    ok: bool
+    delta: float = 0.0
+
+    @property
+    def route_label(self) -> str:
+        count, tag = self.route
+        name = {"F": "feeder", "D": "distribution"}.get(tag, "")
+        return f"{count}ct {name}".strip() if count else (name or "route")
+
+
+def check_conduit(buried_runs: list) -> list:
+    """Cross-check each buried run's conduit footage against the drawing.
+
+    A run enters the ground at ``In`` and leaves at ``Out``; the conduit that gets
+    it there was placed from the previous run's exit, so::
+
+        In[n] - Out[n-1] == Pipe[n]
+
+    Runs are walked in the direction the route is stationed, which differs between
+    routes, so the direction is read off each route's own chain."""
+    routes: dict = {}
+    for r in buried_runs:
+        if r.in_sta is not None and r.out_sta is not None:
+            routes.setdefault(r.route, []).append(r)
+
+    out: list = []
+    for route, runs in routes.items():
+        uniq = {(r.in_sta, r.out_sta, r.pipe_ft): r for r in runs}
+        ordered = sorted(uniq.values(), key=lambda r: r.in_sta)
+        if len(ordered) < 2:
+            continue
+        # ascending or descending stationing — whichever the chain supports
+        fwd = sum(1 for a, b in zip(ordered, ordered[1:])
+                  if b.pipe_ft is not None and b.in_sta - a.out_sta == b.pipe_ft)
+        rev = sum(1 for a, b in zip(ordered, ordered[1:])
+                  if a.pipe_ft is not None and b.out_sta - a.in_sta == a.pipe_ft)
+        for a, b in zip(ordered, ordered[1:]):
+            if abs(b.page - a.page) > _MAX_PAGE_JUMP:
+                continue                            # route left the sheet run
+            owner, gap = ((b, b.in_sta - a.out_sta) if fwd >= rev
+                          else (a, b.out_sta - a.in_sta))
+            if owner.pipe_ft is None:
+                continue                            # no conduit claimed on this run
+            out.append(ConduitCheck(
+                route=route, page=owner.page,
+                station_from=(a.out_sta if fwd >= rev else a.in_sta),
+                station_to=(b.in_sta if fwd >= rev else b.out_sta),
+                gap=float(gap), stated=owner.pipe_ft,
+                ok=(gap == owner.pipe_ft), delta=owner.pipe_ft - gap))
+    return out
+
+
+def check_stationing(span_records: list, coil_marks: list | None = None,
+                     buried_runs: list | None = None) -> StationingReport:
     """Walk each route in station order and compare every adjacent pair's gap
-    against the footage written on the comments, plus any coil sitting inside it."""
+    against the footage written on the comments, plus any coil sitting inside it.
+    Buried runs are checked the same way, against the conduit they needed."""
     report = StationingReport()
+    report.conduit = check_conduit(buried_runs or [])
     remap = _untagged_remap(span_records)
     routes: dict = {}
     for s in span_records:

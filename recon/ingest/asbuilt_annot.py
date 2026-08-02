@@ -272,6 +272,20 @@ class SpanRecord:
 
 
 @dataclass
+class BuriedRun:
+    """One buried run as written: where the bore enters and leaves, the fiber pulled
+    and the conduit placed. The conduit reaches from the previous run's exit to this
+    run's entry, which makes the stationing a checksum on the pipe footage."""
+    page: int
+    route: tuple                    # (cable count, 'F' | 'D' | '')
+    in_sta: int | None = None
+    out_sta: int | None = None
+    bfo_ft: float | None = None
+    pipe_ft: float | None = None
+    raw: str = ""
+
+
+@dataclass
 class CoilMark:
     """A coil / riser and the station it is listed at. Coils consume stationing, so
     the cross-check has to know *where* one sits, not just that a span had one."""
@@ -293,6 +307,7 @@ class AnnotParse:
     unresolved: list[tuple[int, str]] = field(default_factory=list)
     span_records: list = field(default_factory=list)   # list[SpanRecord]
     coil_marks: list = field(default_factory=list)     # list[CoilMark]
+    buried_runs: list = field(default_factory=list)    # list[BuriedRun]
 
     def add(self, it: ItemType, amount: float) -> None:
         if not amount:
@@ -383,6 +398,11 @@ class _Ctx:
     extra_ft: float = 0.0                  # coils / risers with no station of their own
     # a coil's footage waits here until the station it is listed at is read
     pending_coil_ft: float = 0.0
+    # the buried run currently being read
+    in_sta: int | None = None
+    out_sta: int | None = None
+    bfo_ft: float | None = None
+    pipe_ft: float | None = None
     raw: str = ""
     # a BM60 spec often sits on its own line with the footage on the next
     # ("BM60(2-1.25\")" then "Bore=636'") — carried forward within the comment
@@ -429,12 +449,20 @@ def _flush_span(res: AnnotParse, ctx: _Ctx) -> None:
             page=ctx.page, route=(str(ctx.seg_count or ""), ctx.seg_route),
             station=ctx.sta, span_ft=ctx.span_ft, extra_ft=extra, raw=ctx.raw,
             station_end=ctx.sta_end))
+    # bank the buried run too — its conduit is checked against the stationing
+    if ctx.seg_kind == "B" and (ctx.in_sta is not None or ctx.out_sta is not None):
+        res.buried_runs.append(BuriedRun(
+            page=ctx.page, route=(str(ctx.seg_count or ""), ctx.seg_route),
+            in_sta=ctx.in_sta, out_sta=ctx.out_sta, bfo_ft=ctx.bfo_ft,
+            pipe_ft=ctx.pipe_ft, raw=ctx.raw))
     ctx.sta = None
     ctx.sta2 = None
     ctx.sta_end = None
     ctx.span_ft = None
     ctx.extra_ft = 0.0
     ctx.pending_coil_ft = 0.0
+    ctx.in_sta = ctx.out_sta = None
+    ctx.bfo_ft = ctx.pipe_ft = None
 
 
 def _parse_comment(toks: list[str], page: int, res: AnnotParse) -> None:
@@ -526,6 +554,8 @@ def _classify(t: str, raw: str, res: AnnotParse, ctx: _Ctx) -> bool:
     if b.startswith("PM2A"):                       # not a contract unit
         return True
     if re.match(r"^PIPE\b", b):                    # reference — conduit bills BM60
+        if ft is not None:                         # but it checks the stationing
+            ctx.pipe_ft = ft
         return True
     if re.fullmatch(r"[_\-—–.\s]+", b):            # separator / doodle
         return True
@@ -588,6 +618,8 @@ def _classify(t: str, raw: str, res: AnnotParse, ctx: _Ctx) -> bool:
         val = ft if ft is not None else _trailing_qty(b)
         if val is not None:
             res.add(_bfo_type(ctx.seg_count, ctx.seg_ie), val)
+            if ctx.bfo_ft is None:
+                ctx.bfo_ft = val
         return True
 
     # --- conduit / bore ------------------------------------------------------
@@ -681,6 +713,14 @@ def _classify(t: str, raw: str, res: AnnotParse, ctx: _Ctx) -> bool:
     # --- stations / geometry (positional reference, not billable) ------------
     head = re.split(r"[\s\-:=]", b)[0]
     if head in _STATION_WORDS:
+        # a buried run's entry and exit anchor the conduit it needs
+        m_sta = re.search(r"(\d[\d,]{2,})", t)
+        if m_sta and ctx.seg_kind == "B":
+            sta = int(m_sta.group(1).replace(",", ""))
+            if head == "IN" and ctx.in_sta is None:
+                ctx.in_sta = sta
+            elif head in ("OUT", "END") and ctx.out_sta is None:
+                ctx.out_sta = sta
         return True
     # a bare number continues the current span: with a foot mark it is always
     # footage; without one, only a small value is (larger is a station id).

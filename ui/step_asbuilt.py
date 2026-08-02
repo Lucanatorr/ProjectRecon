@@ -153,6 +153,24 @@ def _stationing_panel() -> None:
                         'any two sequentials on their route, so they are the most '
                         'likely to be mis-stated.</div>', unsafe_allow_html=True)
 
+        if rep.conduit:
+            bad = rep.conduit_failures
+            st.markdown('<div class="card__t" style="margin-top:14px">Buried '
+                        'conduit</div>'
+                        f'<div class="card__note">{len(rep.conduit) - len(bad)} of '
+                        f'{len(rep.conduit)} runs place the conduit their stationing '
+                        'calls for.</div>', unsafe_allow_html=True)
+            if bad:
+                headers = [("Page", ""), ("Route", ""), ("Stationing", ""),
+                           ("Needed", "r"), ("Claimed", "r"), ("Diff", "r")]
+                body = [[td(f"p{c.page}"), td(c.route_label),
+                         td(f"{c.station_from:,} → {c.station_to:,}", "code"),
+                         td(f"{c.gap:,.0f} ft", "r num"),
+                         td(f"{c.stated:,.0f} ft", "r num"),
+                         f'<td class="r num" style="color:var(--critical)">'
+                         f'{c.delta:+,.0f} ft</td>'] for c in bad]
+                st.markdown(table_html(headers, body), unsafe_allow_html=True)
+
         if rep.failures:
             with st.expander(f"Chain detail · {len(rep.failures)} run(s) that "
                              "don't close"):
@@ -240,7 +258,8 @@ def _ingest_pdf_annotations(state: WizardState, path, name: str) -> None:
         step(25, "Extracting comments…")
         res = parse_annotations(extract_annotations(path))
         step(55, "Checking footages against stationing…")
-        stationing = check_stationing(res.span_records, res.coil_marks)
+        stationing = check_stationing(res.span_records, res.coil_marks,
+                                      res.buried_runs)
         step(80, "Matching to the bid schedule…")
         lines, resolved = to_asbuilt_lines(res, state.contract, state.aliases)
         state.asbuilt = lines
