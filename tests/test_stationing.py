@@ -49,8 +49,26 @@ def test_a_bad_footage_is_not_rescued_by_its_neighbour():
 
 
 def test_off_by_one_is_still_a_failure():
-    r = check_stationing([_span(15222, 193), _span(15620, 206)])
-    assert len(r.failures) == 1          # 398 gap vs 193 stated — exact match only
+    # real PON 11 p27: 26180 - 25988 is 192, but the span claims 193. One foot is
+    # still a mismatch — no tolerance.
+    r = check_stationing([_span(25988, 193), _span(26180, 193)])
+    assert len(r.failures) == 1
+    assert r.failures[0].gap == 192 and r.failures[0].delta == 1
+
+
+def test_a_run_longer_than_any_span_on_the_route_is_a_break_not_a_failure():
+    # nothing on this route claims more than 100 ft, so a 400 ft run has work in
+    # between that isn't on these sheets — that is not a footage to blame
+    r = check_stationing([_span(1000, 100), _span(1100, 100), _span(1500, 100)])
+    assert r.checked == 1 and not r.failures
+    assert r.unverifiable == 1
+
+
+def test_a_run_a_span_could_have_built_stays_checkable():
+    # 372 is under the route's longest claim (392), so an understated footage is
+    # flagged rather than written off as a break
+    r = check_stationing([_span(1000, 392), _span(1392, 392), _span(1764, 392)])
+    assert [c.gap for c in r.failures] == [372]
 
 
 def test_a_route_that_states_footage_on_arrival_is_read_that_way():
@@ -99,7 +117,6 @@ def test_duplicate_records_do_not_create_a_phantom_gap():
 # --- report ---------------------------------------------------------------- #
 def test_report_summarises_verified_and_unaccounted():
     r = check_stationing([_span(1000, 100), _span(1100, 100), _span(1500, 100)])
-    assert r.checked == 2 and len(r.failures) == 1
     assert "1 of 3 span footages verified" in r.summary()
     assert "1 match no distance" in r.summary()
 

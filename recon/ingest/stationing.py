@@ -25,9 +25,32 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-# Spans further apart than this many sheets aren't a continuous run — the route
-# left the page and came back, so the gap can't be checked.
-_MAX_PAGE_JUMP = 3
+# Buried runs carry no intermediate sequentials, so their chain can't be walked the
+# way an aerial route's can — see the note in check_conduit.
+_MAX_BURIED_PAGE_JUMP = 3
+
+
+def _longest_claim(items, claim) -> float:
+    """The largest single run anyone wrote on this route."""
+    return max((claim(i) for i in items if claim(i)), default=0.0)
+
+
+def _is_break(gap: float, longest: float) -> bool:
+    """Whether a run between two sequentials is a break in the chain rather than
+    something a span could have built.
+
+    A route leaves the sheet and comes back, so two comments that are neighbours in
+    station order are not always neighbours on the ground. The giveaway is size: a
+    run longer than the longest span anyone wrote on this route cannot be one span,
+    so there is work in between that simply isn't on these sheets — that is not
+    something a footage can be blamed for.
+
+    The comparison is deliberately strict rather than padded. A run that *could* be
+    one span stays checkable, so an understated footage is flagged rather than
+    written off as a break; the cost of guessing wrong that way is a second look,
+    while the other way round loses the error entirely.
+    """
+    return longest > 0 and gap > longest
 
 
 @dataclass
@@ -144,13 +167,21 @@ def _measure(a, b, ahead: bool, coil_in: bool, coil_ft):
     return gap, owner.span_ft + owner.extra_ft + extra, owner
 
 
-def _best_convention(ordered: list, coil_ft) -> tuple:
-    """The (ahead, coil_in) reading that this route's own chain supports best."""
+def _best_convention(ordered: list, coil_ft, longest: float = 0.0) -> tuple:
+    """The (ahead, coil_in) reading that this route's own chain supports best.
+    Breaks are ignored, so a route that leaves the sheet often can't skew which
+    reading looks right."""
+    def scores(conv):
+        hits = 0
+        for a, b in zip(ordered, ordered[1:]):
+            gap, stated, owner = _measure(a, b, *conv, coil_ft)
+            if owner.span_ft and not _is_break(gap, longest) and gap == stated:
+                hits += 1
+        return hits
+
     best, best_hits = _CONVENTIONS[0], -1
     for conv in _CONVENTIONS:
-        hits = sum(1 for a, b in zip(ordered, ordered[1:])
-                   if (lambda g, s, o: bool(o.span_ft) and g == s)(
-                       *_measure(a, b, *conv, coil_ft)))
+        hits = scores(conv)
         if hits > best_hits:
             best, best_hits = conv, hits
     return best
@@ -231,13 +262,23 @@ def check_conduit(buried_runs: list) -> list:
                   if b.pipe_ft is not None and b.in_sta - a.out_sta == b.pipe_ft)
         rev = sum(1 for a, b in zip(ordered, ordered[1:])
                   if a.pipe_ft is not None and b.out_sta - a.in_sta == a.pipe_ft)
+        longest = _longest_claim(ordered, lambda r: r.pipe_ft or 0)
         for a, b in zip(ordered, ordered[1:]):
-            if abs(b.page - a.page) > _MAX_PAGE_JUMP:
-                continue                            # route left the sheet run
+            # Aerial spans chain densely enough that the length of a run tells you
+            # whether it is a break. Buried runs don't: a route's bores are scattered
+            # through the book (one PON 9 route runs pages 154, 140, 153, 137, 17…),
+            # so two runs adjacent in station order are often nowhere near each other
+            # on the ground and there are no intermediate sequentials to step
+            # through. Until buried work carries nodes of its own, how close the two
+            # sit in the book separates a break from a discrepancy better than size.
+            if abs(b.page - a.page) > _MAX_BURIED_PAGE_JUMP:
+                continue
             owner, gap = ((b, b.in_sta - a.out_sta) if fwd >= rev
                           else (a, b.out_sta - a.in_sta))
             if owner.pipe_ft is None:
                 continue                            # no conduit claimed on this run
+            if _is_break(gap, longest):             # too long to be one conduit run
+                continue
             out.append(ConduitCheck(
                 route=route, page=owner.page,
                 station_from=(a.out_sta if fwd >= rev else a.in_sta),
@@ -314,15 +355,16 @@ def check_stationing(span_records: list, coil_marks: list | None = None,
             whichever gap contains the station it is listed at."""
             return sum(c.ft for c in _m if lo < c.station <= hi)
 
-        conv = _best_convention(ordered, coil_ft)
+        longest = _longest_claim(ordered, lambda s: (s.span_ft or 0) + s.extra_ft)
+        conv = _best_convention(ordered, coil_ft, longest)
         for a, b in zip(ordered, ordered[1:]):
-            if abs(b.page - a.page) > _MAX_PAGE_JUMP:
-                report.unverifiable += 1            # route left the sheet run
-                continue
             # exactly one span owns the run, read the way this route writes them,
             # and its footage has to close it on its own
             gap, stated, owner = _measure(a, b, *conv, coil_ft)
             if not owner.span_ft:                   # a bare sequential claims nothing
+                report.unverifiable += 1
+                continue
+            if _is_break(gap, longest):             # the route left these sheets
                 report.unverifiable += 1
                 continue
             ok = gap == stated
