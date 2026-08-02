@@ -150,25 +150,56 @@ def _best_convention(ordered: list, coil_ft) -> tuple:
     return best
 
 
+def _untagged_remap(span_records: list) -> dict:
+    """Where untagged comments really belong. Contractors tag most spans with the
+    feeder/distribution route but not every one; an untagged span still sits among
+    the stations of a real route, so fold it into the same-cable route whose station
+    range it falls closest to. Returns the routes to rewrite."""
+    by_route: dict = {}
+    for s in span_records:
+        by_route.setdefault(s.route, []).append(s)
+    ranges = {r: (min(x.station for x in v), max(x.station for x in v))
+              for r, v in by_route.items() if r[1]}
+
+    remap: dict = {}
+    for route, spans in by_route.items():
+        count, tag = route
+        if tag:
+            continue
+        cands = [r for r in ranges if r[0] == count]
+        if not cands:
+            continue
+        centre = sum(x.station for x in spans) / len(spans)
+
+        def distance(r, _c=centre):
+            lo, hi = ranges[r]
+            return 0 if lo <= _c <= hi else min(abs(_c - lo), abs(_c - hi))
+
+        remap[route] = min(cands, key=distance)
+    return remap
+
+
 def check_stationing(span_records: list, coil_marks: list | None = None
                      ) -> StationingReport:
     """Walk each route in station order and compare every adjacent pair's gap
     against the footage written on the comments, plus any coil sitting inside it."""
     report = StationingReport()
+    remap = _untagged_remap(span_records)
     routes: dict = {}
     for s in span_records:
-        routes.setdefault(s.route, []).append(s)
+        routes.setdefault(remap.get(s.route, s.route), []).append(s)
 
     coils: dict = {}
     for c in (coil_marks or []):
-        coils.setdefault(c.route, []).append(c)
+        coils.setdefault(remap.get(c.route, c.route), []).append(c)
 
     # every sequential known on each route, for the fallback plausibility check
     stations: dict = {}
     for s in span_records:
-        stations.setdefault(s.route, set()).update((s.station, s.end))
+        stations.setdefault(remap.get(s.route, s.route), set()).update(
+            (s.station, s.end))
     for c in (coil_marks or []):
-        stations.setdefault(c.route, set()).add(c.station)
+        stations.setdefault(remap.get(c.route, c.route), set()).add(c.station)
 
     verified: set = set()
 
@@ -206,14 +237,15 @@ def check_stationing(span_records: list, coil_marks: list | None = None
 
     # every span gets a verdict, including those with no neighbour to chain to
     for s in span_records:
-        key = (s.route, s.station, s.span_ft)
+        route = remap.get(s.route, s.route)
+        key = (route, s.station, s.span_ft)
         if key in verified:
             verdict = VERIFIED
         else:
-            known = sorted(stations.get(s.route, ()))
+            known = sorted(stations.get(route, ()))
             reachable = {abs(x - y) for y in (s.station, s.end) for x in known}
             verdict = PLAUSIBLE if s.span_ft in reachable else UNVERIFIED
         report.verdicts.append(SpanVerdict(
-            page=s.page, route=s.route, station=s.station, span_ft=s.span_ft,
+            page=s.page, route=route, station=s.station, span_ft=s.span_ft,
             verdict=verdict))
     return report

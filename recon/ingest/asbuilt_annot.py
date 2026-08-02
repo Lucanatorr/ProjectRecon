@@ -308,8 +308,16 @@ class AnnotParse:
 #  patterns
 # --------------------------------------------------------------------------- #
 _CABLE = re.compile(r"^([AB])FO[\s.]*0*(\d+)\s*F?\b", re.I)      # AFO 48 (F), BFO.96.I
-# the route a span belongs to: (F)eeder / (D)istribution, or the written-out forms
-_ROUTE = re.compile(r"\(\s*([FD])\s*\)|\b(TRUNK|DIST|FEEDER)\b", re.I)
+# The route a span belongs to: (F)eeder / (D)istribution, the written-out forms, or
+# a bare trailing tag ("AFO 144 F"). The tag must be separated from the count —
+# "AFO 288F" is a 288-fiber cable, not the feeder.
+_ROUTE = re.compile(
+    r"\(\s*([FD])\s*\)|\b(TRUNK|DIST|FEEDER)\b|\s([FD])\s*$", re.I)
+# Fiber counts a cable can actually be. A number outside this set after "AFO" is a
+# footage ("AFO 444"), not a new cable segment.
+_FIBER_COUNTS = frozenset((12, 24, 36, 48, 72, 96, 144, 216, 288, 432, 576))
+# a station written on the header itself: "AFO 48 (D) 26984"
+_HDR_STATION = re.compile(r"(?<!\d)(\d{4,6})(?!\d)")
 # "AFO 48 Coil - 150" / "AFO 96 up pole - 24'" open like a cable header but are a
 # coil or riser, whose footage is consumed stationing — never placed cable.
 _NOT_A_HEADER = re.compile(r"\b(COIL|SNOW\s*SHOE|UP\s*POLE|DOWN\s*POLE)\b", re.I)
@@ -445,6 +453,10 @@ def _parse_comment(toks: list[str], page: int, res: AnnotParse) -> None:
             continue
 
         mc = _CABLE.match(t)
+        # "AFO 444" is a footage on the current segment, not a 444-fiber cable —
+        # only a real fiber count opens a new one
+        if mc and int(mc.group(2)) not in _FIBER_COUNTS and ctx.seg_kind:
+            mc = None
         if mc and not _NOT_A_HEADER.search(t):
             _flush_span(res, ctx)                    # a new header ends the last span
             ctx.seg_kind = mc.group(1).upper()
@@ -452,7 +464,8 @@ def _parse_comment(toks: list[str], page: int, res: AnnotParse) -> None:
             ctx.seg_ie = bool(re.search(r"\.\s*IE\b|\bIE\b", t))
             rm = _ROUTE.search(t)
             if rm:
-                ctx.seg_route = (rm.group(1) or rm.group(2)[0]).upper()
+                tag = rm.group(1) or rm.group(2) or rm.group(3)
+                ctx.seg_route = tag[0].upper()
             ctx.raw = tok
             ft = _FT.search(t) or _TRAIL.search(t)
             if ft:                                   # cable label carrying footage
@@ -462,6 +475,12 @@ def _parse_comment(toks: list[str], page: int, res: AnnotParse) -> None:
                     ctx.span_ft = val
                 else:
                     res.add(_bfo_type(ctx.seg_count, ctx.seg_ie), val)
+            else:
+                # the station can be written on the header: "AFO 48 (D) 26984"
+                after = t[mc.end():]
+                sm = _HDR_STATION.search(after)
+                if sm:
+                    ctx.sta = int(sm.group(1))
             continue
 
         if not _classify(t, tok, res, ctx):
@@ -549,6 +568,12 @@ def _classify(t: str, raw: str, res: AnnotParse, ctx: _Ctx) -> bool:
                 res.add(ITEM_TYPES[item], n)
                 return True
         val = ft if ft is not None else _trailing_qty(b)
+        if val is None:
+            # written without a separator: "AFO 444". Only a number that isn't a
+            # fiber count reaches here, so it is the span's footage.
+            m_bare = re.fullmatch(r"AFO\.?\s*(\d[\d,]*)", b)
+            if m_bare:
+                val = float(m_bare.group(1).replace(",", ""))
         if val is not None:
             ctx.pending_afo.append((ctx.seg_count, val))
             if ctx.span_ft is None:

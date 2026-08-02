@@ -163,3 +163,48 @@ def test_an_unanchored_coil_still_falls_back_to_its_span():
     res = parse_annotations([_ann("AFO 48 (D) | 19514 | AFO - 364 | AFO Coil - 150")])
     assert not res.coil_marks
     assert res.span_records[0].extra_ft == 150
+
+
+# --- notation variants learned from the PON 11 drawings -------------------- #
+def test_a_bare_trailing_tag_is_the_route_not_a_fiber_count():
+    res = parse_annotations([_ann("AFO 144 F | 27312 | AFO - 218")])
+    assert res.span_records[0].route == ("144", "F")
+
+
+def test_a_fiber_count_suffix_is_not_mistaken_for_the_feeder_route():
+    # Hoke writes "AFO 288F" meaning a 288-fiber cable, not the feeder
+    res = parse_annotations([_ann("AFO 288F | 6288 | 410'")])
+    assert res.span_records[0].route == ("288", "")
+
+
+def test_a_station_written_on_the_header_is_read():
+    res = parse_annotations(
+        [_ann("AFO 48 (D) 26984 | AFO - 196 | AFO coil - 76 | 26908")])
+    rec = res.span_records[0]
+    assert rec.station == 26984 and rec.span_ft == 196
+    assert rec.end == 26908                     # the coil carries the line on
+
+
+def test_footage_written_without_a_separator():
+    # "AFO 444" — 444 is no fiber count, so it is this span's footage
+    res = parse_annotations([_ann("AFO 144 (D) | 23124 | AFO 444")])
+    rec = res.span_records[0]
+    assert rec.route == ("144", "D") and rec.span_ft == 444
+
+
+def test_untagged_spans_fold_into_the_route_they_sit_among():
+    # an untagged 96ct span at 11102 belongs to the tagged 96ct route it adjoins,
+    # and once folded in, its 146 ft closes the run to 11248
+    spans = [_span(11102, 146, route=("96", "")),
+             _span(11248, 368, route=("96", "D")),
+             _span(11616, 368, route=("96", "D"))]
+    r = check_stationing(spans)
+    assert {v.route for v in r.verdicts} == {("96", "D")}   # one route, not two
+    assert not r.unverified
+
+
+def test_an_untagged_route_is_left_alone_when_no_cable_matches():
+    spans = [_span(1000, 100, route=("48", "")), _span(1100, 100, route=("48", "")),
+             _span(5000, 100, route=("144", "D"))]
+    r = check_stationing(spans)
+    assert ("48", "") in {v.route for v in r.verdicts}      # not folded into 144ct
