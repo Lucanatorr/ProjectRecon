@@ -23,29 +23,52 @@ def _ann(pipe: str, page: int = 1) -> Annotation:
 
 
 # --- the arithmetic ------------------------------------------------------- #
-def test_consecutive_spans_that_match_their_stationing_pass():
-    # 19670 -> 19984 is 314 ft, and the span says 314
-    r = check_stationing([_span(19670, 314), _span(19984, 314)])
+def test_a_span_that_closes_its_own_gap_passes():
+    # the span at 19670 places 314 ft, reaching the next station at 19984
+    r = check_stationing([_span(19670, 314), _span(19984, 72)])
     assert r.checked == 1 and r.passed == 1 and not r.failures
 
 
 def test_a_coil_consumes_stationing_and_still_reconciles():
-    # 19514 + 150 coil + 364 span = 20028
+    # 19514 + 364 span + 150 coil = 20028
     r = check_stationing([_span(19514, 364, extra=150), _span(20028, 354)])
     assert r.passed == 1 and not r.failures
 
 
-def test_a_footage_that_disagrees_is_flagged_exactly():
-    # gap is 372 but the comment claims 392 — no tolerance, so this must fail
-    r = check_stationing([_span(25966, 392), _span(26338, 392)])
+def test_a_bad_footage_is_not_rescued_by_its_neighbour():
+    # once a route's direction is established, exactly one span owns each gap — a
+    # neighbour that happens to carry the right number must not cover for it
+    spans = [_span(1000, 100), _span(1100, 100), _span(1200, 100),
+             _span(1300, 555),                   # wrong: the gap it owns is 100
+             _span(1400, 100), _span(1500, 777)]
+    r = check_stationing(spans)
     assert len(r.failures) == 1
     f = r.failures[0]
-    assert f.gap == 372 and f.stated == 392 and f.delta == 20
+    assert f.station_from == 1300 and f.gap == 100 and f.stated == 555
+    assert f.delta == 455
 
 
 def test_off_by_one_is_still_a_failure():
     r = check_stationing([_span(15222, 193), _span(15620, 206)])
-    assert len(r.failures) == 1          # 398 gap vs 399 stated — exact match only
+    assert len(r.failures) == 1          # 398 gap vs 193 stated — exact match only
+
+
+def test_a_route_that_states_footage_on_arrival_is_read_that_way():
+    # real PON 10 (48, F): each span's footage is the run *into* its station
+    spans = [_span(23706, 344), _span(23986, 280), _span(24258, 272),
+             _span(24470, 212), _span(24708, 238)]
+    r = check_stationing(spans)
+    assert r.checked == 4 and not r.failures
+
+
+def test_the_route_direction_does_not_leak_between_routes():
+    # an arrival-stated route and a departure-stated one in the same book
+    arriving = [_span(1000, 0, route=("48", "F")), _span(1100, 100, route=("48", "F")),
+                _span(1250, 150, route=("48", "F"))]
+    leaving = [_span(1000, 100, route=("144", "D")), _span(1100, 150, route=("144", "D")),
+               _span(1250, 999, route=("144", "D"))]
+    r = check_stationing(arriving + leaving)
+    assert r.checked == 4 and not r.failures
 
 
 def test_routes_are_checked_independently():
