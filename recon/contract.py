@@ -12,11 +12,16 @@ import pandas as pd
 from recon.ingest.normalize import normalize_uom
 from recon.models import ContractItem, UoM
 
-# Column header tokens we accept for each logical field (lowercased, substring match).
+# Column header tokens we accept for each logical field (lowercased, substring
+# match). Resolution runs in this order and a column can only be claimed once, so
+# the more specific header wins: a rate sheet headed CODE | UNIT DESCRIPTION | UNIT
+# | RATE gives "unit description" to the description and leaves bare "unit" — which
+# is where its per-foot / each actually lives — to the UoM.
 _COL_ALIASES = {
     "code": ["code", "item", "bid item", "item no", "item #", "ref"],
-    "description": ["description", "desc", "unit", "work item", "item description"],
-    "uom": ["uom", "unit of measure", "u/m", "units", "measure"],
+    "description": ["description", "desc", "unit description", "work item",
+                    "item description"],
+    "uom": ["uom", "unit of measure", "u/m", "units", "measure", "unit"],
     "unit_price": ["unit price", "price", "rate", "unit cost", "cost"],
     "est_qty": ["est qty", "estimated qty", "estimated quantity", "est quantity",
                 "qty", "quantity", "bid qty", "est. qty"],
@@ -38,20 +43,32 @@ def _read_table(path: str | Path) -> pd.DataFrame:
 
 
 def _resolve_columns(df: pd.DataFrame) -> dict[str, str]:
-    """Map logical field -> actual column name using alias substring matching."""
+    """Map logical field -> actual column name using alias substring matching.
+
+    A column is claimed by at most one field, so a sheet that heads two columns with
+    the same word — UNIT DESCRIPTION and UNIT — gives each to the field whose alias
+    describes it most closely rather than letting the first field take both.
+    """
     resolved: dict[str, str] = {}
+    taken: set[str] = set()
     lowered = {col: col.lower().strip() for col in df.columns}
-    for field_name, aliases in _COL_ALIASES.items():
+
+    def claim(field_name: str, match) -> bool:
         for col, low in lowered.items():
-            if any(low == a or low.startswith(a) for a in aliases):
+            if col not in taken and match(low):
                 resolved[field_name] = col
-                break
-        else:
-            # fall back to a looser substring match
-            for col, low in lowered.items():
-                if any(a in low for a in aliases):
-                    resolved[field_name] = col
-                    break
+                taken.add(col)
+                return True
+        return False
+
+    for field_name, aliases in _COL_ALIASES.items():
+        exact = claim(field_name, lambda low, a=aliases: low in a)
+        if exact:
+            continue
+        starts = claim(field_name, lambda low, a=aliases:
+                       any(low.startswith(x) for x in a))
+        if not starts:                                  # looser substring match
+            claim(field_name, lambda low, a=aliases: any(x in low for x in a))
     return resolved
 
 
