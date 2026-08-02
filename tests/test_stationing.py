@@ -249,3 +249,19 @@ def test_buried_runs_reach_the_report():
     assert len(res.buried_runs) == 2
     rep = check_stationing(res.span_records, res.coil_marks, res.buried_runs)
     assert len(rep.conduit) == 1 and not rep.conduit_failures
+
+
+def test_a_sequential_with_no_span_is_still_a_chain_node():
+    from recon.ingest.stationing import VERIFIED
+    # a pole comment carrying no footage (9306) still sits on the route: without it
+    # the 366 ft span at 9672 looks like it spans two poles
+    res = parse_annotations([
+        _ann("AFO 144F | 9306 | AFO BOND | AFO SL", page=11),
+        _ann("AFO 144F | 9672 | AFO - 366 | AFO BOND", page=11),
+        _ann("AFO 144F | 9954 | AFO - 282 | AFO BOND", page=12)])
+    assert len(res.span_records) == 2            # 9306 has no footage of its own
+    assert 9306 in res.route_stations[("144", "")]
+    rep = check_stationing(res.span_records, res.coil_marks, res.buried_runs,
+                           res.route_stations)
+    by = {v.station: v.verdict for v in rep.verdicts}
+    assert by[9672] == VERIFIED                  # 9672 - 9306 = 366

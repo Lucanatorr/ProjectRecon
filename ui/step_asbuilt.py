@@ -259,7 +259,7 @@ def _ingest_pdf_annotations(state: WizardState, path, name: str) -> None:
         res = parse_annotations(extract_annotations(path))
         step(55, "Checking footages against stationing…")
         stationing = check_stationing(res.span_records, res.coil_marks,
-                                      res.buried_runs)
+                                      res.buried_runs, res.route_stations)
         step(80, "Matching to the bid schedule…")
         lines, resolved = to_asbuilt_lines(res, state.contract, state.aliases)
         state.asbuilt = lines

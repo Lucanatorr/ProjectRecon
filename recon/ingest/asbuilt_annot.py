@@ -308,6 +308,12 @@ class AnnotParse:
     span_records: list = field(default_factory=list)   # list[SpanRecord]
     coil_marks: list = field(default_factory=list)     # list[CoilMark]
     buried_runs: list = field(default_factory=list)    # list[BuriedRun]
+    # every sequential seen on each route, whether or not a span was written at it —
+    # these are the chain's nodes, and a route steps through all of them
+    route_stations: dict = field(default_factory=dict)
+
+    def note_station(self, route: tuple, station: int) -> None:
+        self.route_stations.setdefault(route, set()).add(station)
 
     def add(self, it: ItemType, amount: float) -> None:
         if not amount:
@@ -509,6 +515,8 @@ def _parse_comment(toks: list[str], page: int, res: AnnotParse) -> None:
                 sm = _HDR_STATION.search(after)
                 if sm:
                     ctx.sta = int(sm.group(1))
+                    res.note_station((str(ctx.seg_count or ""), ctx.seg_route),
+                                     ctx.sta)
             continue
 
         if not _classify(t, tok, res, ctx):
@@ -736,6 +744,7 @@ def _classify(t: str, raw: str, res: AnnotParse, ctx: _Ctx) -> bool:
                 res.add(_bfo_type(ctx.seg_count, ctx.seg_ie), val)
         else:                                        # a station id
             sta = int(val)
+            res.note_station((str(ctx.seg_count or ""), ctx.seg_route), sta)
             # a coil is anchored to the station it is listed at, and carries the
             # main line on to it — the next span measures from there
             if ctx.pending_coil_ft:

@@ -149,7 +149,8 @@ def _best_convention(ordered: list, coil_ft) -> tuple:
     best, best_hits = _CONVENTIONS[0], -1
     for conv in _CONVENTIONS:
         hits = sum(1 for a, b in zip(ordered, ordered[1:])
-                   if (lambda g, s, _o: g == s)(*_measure(a, b, *conv, coil_ft)))
+                   if (lambda g, s, o: bool(o.span_ft) and g == s)(
+                       *_measure(a, b, *conv, coil_ft)))
         if hits > best_hits:
             best, best_hits = conv, hits
     return best
@@ -246,8 +247,26 @@ def check_conduit(buried_runs: list) -> list:
     return out
 
 
+def _with_nodes(spans: list, node_stations, cls):
+    """The route's chain, stepping through *every* sequential on it — not only the
+    ones a span was written at. A pole with no footage on its comment is still a
+    point the route passes through, and skipping it makes the next span look like it
+    spans two poles. Nodes with no span of their own carry no footage and are only
+    boundaries."""
+    have = {s.station for s in spans}
+    filler = [cls(page=_nearest_page(spans, st), route=spans[0].route, station=st,
+                  span_ft=0.0) for st in node_stations if st not in have]
+    return sorted(spans + filler, key=lambda s: s.station)
+
+
+def _nearest_page(spans: list, station: int) -> int:
+    """The sheet a bare sequential most likely sits on — the nearest span's."""
+    return min(spans, key=lambda s: abs(s.station - station)).page
+
+
 def check_stationing(span_records: list, coil_marks: list | None = None,
-                     buried_runs: list | None = None) -> StationingReport:
+                     buried_runs: list | None = None,
+                     route_stations: dict | None = None) -> StationingReport:
     """Walk each route in station order and compare every adjacent pair's gap
     against the footage written on the comments, plus any coil sitting inside it.
     Buried runs are checked the same way, against the conduit they needed."""
@@ -280,6 +299,13 @@ def check_stationing(span_records: list, coil_marks: list | None = None,
         if len(ordered) < 2:
             report.unverifiable += len(ordered)
             continue
+        # step through every sequential on the route, not only the ones with a span
+        nodes = set()
+        for r0, sts in (route_stations or {}).items():
+            if remap.get(r0, r0) == route:
+                nodes |= set(sts)
+        if nodes:
+            ordered = _with_nodes(ordered, nodes, type(ordered[0]))
 
         marks = coils.get(route, ())
 
@@ -296,6 +322,9 @@ def check_stationing(span_records: list, coil_marks: list | None = None,
             # exactly one span owns the run, read the way this route writes them,
             # and its footage has to close it on its own
             gap, stated, owner = _measure(a, b, *conv, coil_ft)
+            if not owner.span_ft:                   # a bare sequential claims nothing
+                report.unverifiable += 1
+                continue
             ok = gap == stated
             report.checks.append(SpanCheck(
                 route=route, page=owner.page, station_from=a.station,
