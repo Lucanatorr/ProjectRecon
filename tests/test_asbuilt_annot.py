@@ -65,6 +65,19 @@ def test_coil_is_one_each_and_its_footage_is_not_double_counted():
     assert r.qty["afo_sl_48"] == 332          # coil's 150 is already inside the span
 
 
+def test_a_coil_written_with_its_cable_count_is_not_placed_cable():
+    # "AFO 48 Coil - 150" opens like a cable header, but it is a coil: the 150 ft is
+    # consumed stationing, never placed cable, and it must still count as one AFO.S
+    r = _parse("AFO 48 (F) | TOP - 20206 | AFO 48 Coil - 150 | 20056 | 1-AFO.BOND")
+    assert r.qty["coil"] == 1
+    assert not any(k.startswith("afo_sl") for k in r.qty)     # nothing billed as cable
+
+
+def test_a_riser_written_with_its_cable_count_is_not_placed_cable():
+    r = _parse("AFO 96 (D) | BOP - 11640 | AFO 96 up pole - 24' | TOP - 11616")
+    assert not any(k.startswith("afo_sl") for k in r.qty)
+
+
 def test_afo_s_is_a_coil_each_not_confused_with_afo_sl():
     r = _parse("AFO 288 | 6698 | 6623 | AFO BOND | AFO SL | AFO S")
     assert r.qty["coil"] == 1 and r.uom["coil"] == "EA"

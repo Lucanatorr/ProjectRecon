@@ -292,6 +292,9 @@ class AnnotParse:
 _CABLE = re.compile(r"^([AB])FO[\s.]*0*(\d+)\s*F?\b", re.I)      # AFO 48 (F), BFO.96.I
 # the route a span belongs to: (F)eeder / (D)istribution, or the written-out forms
 _ROUTE = re.compile(r"\(\s*([FD])\s*\)|\b(TRUNK|DIST|FEEDER)\b", re.I)
+# "AFO 48 Coil - 150" / "AFO 96 up pole - 24'" open like a cable header but are a
+# coil or riser, whose footage is consumed stationing — never placed cable.
+_NOT_A_HEADER = re.compile(r"\b(COIL|SNOW\s*SHOE|UP\s*POLE|DOWN\s*POLE)\b", re.I)
 _FT = re.compile(r"(\d[\d,]*)\s*'")
 _TRAIL = re.compile(r"[-=]\s*(\d[\d,]*)\s*'?\s*$")
 _BARE = re.compile(r"^(\d[\d,]*)\s*(MID|TOP|TAIL|UG|BOTTOM)?$", re.I)
@@ -403,7 +406,7 @@ def _parse_comment(toks: list[str], page: int, res: AnnotParse) -> None:
             continue
 
         mc = _CABLE.match(t)
-        if mc:
+        if mc and not _NOT_A_HEADER.search(t):
             _flush_span(res, ctx)                    # a new header ends the last span
             ctx.seg_kind = mc.group(1).upper()
             ctx.seg_count = int(mc.group(2))
