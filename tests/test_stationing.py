@@ -282,3 +282,28 @@ def test_a_sequential_with_no_span_is_still_a_chain_node():
                            res.route_stations)
     by = {v.station: v.verdict for v in rep.verdicts}
     assert by[9672] == VERIFIED                  # 9672 - 9306 = 366
+
+
+def test_a_footage_slightly_off_its_run_reads_as_mis_keyed():
+    from recon.ingest.stationing import MISKEYED
+    # real PON 11 p27: the run is 192 ft and the span claims 193 — the run is the
+    # right size, so the number is what's wrong
+    r = check_stationing([_span(25988, 193), _span(26180, 193)])
+    v = {x.station: x for x in r.verdicts}[25988]
+    assert v.verdict == MISKEYED and v.off_by == 1
+    assert [x.station for x in r.miskeyed] == [25988]
+
+
+def test_a_run_far_off_its_footage_is_not_called_mis_keyed():
+    from recon.ingest.stationing import MISKEYED
+    # 100 ft claimed on a 380 ft run isn't a typo — something is missing between
+    r = check_stationing([_span(1000, 380), _span(1380, 100), _span(1760, 380)])
+    assert [c.delta for c in r.failures] == [-280]        # the run was checked
+    assert not [x for x in r.verdicts if x.verdict == MISKEYED]
+
+
+def test_mis_keys_are_listed_before_the_unaccounted():
+    from recon.ingest.stationing import MISKEYED, UNVERIFIED
+    r = check_stationing([_span(25988, 193), _span(26180, 193)])
+    assert [v.verdict for v in r.to_review][:1] == [MISKEYED]
+    assert all(v.verdict in (MISKEYED, UNVERIFIED) for v in r.to_review)

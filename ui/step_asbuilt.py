@@ -123,7 +123,7 @@ def _stationing_panel() -> None:
     n = len(rep.verdicts)
     n_ok = len(rep.by_verdict(VERIFIED))
     n_maybe = len(rep.by_verdict(PLAUSIBLE))
-    todo = rep.unverified
+    todo = rep.to_review
     label = (f"Footage check · {len(todo)} span(s) to verify by hand" if todo
              else f"Footage check · all {n} spans accounted for")
     with st.expander(label, expanded=bool(todo)):
@@ -137,21 +137,35 @@ def _stationing_panel() -> None:
              "sub": "footage closes its run exactly"},
             {"label": "Consistent", "value": f"{n_maybe}",
              "sub": "matches a run on the route"},
-            {"label": "Unaccounted", "value": f"{len(todo)}",
+            {"label": "To verify", "value": f"{len(todo)}",
              "sub": "check these first", "flag": True},
         ]), unsafe_allow_html=True)
 
-        if todo:
-            st.markdown('<div class="card__t" style="margin-top:6px">Spans to '
-                        'verify</div>', unsafe_allow_html=True)
+        if rep.miskeyed:
+            st.markdown('<div class="card__t" style="margin-top:6px">Footages the '
+                        'drawing contradicts</div>'
+                        '<div class="card__note" style="margin-bottom:8px">The run '
+                        'between these sequentials is the size a span should be, but '
+                        "the footage written on it doesn't match — the signature "
+                        'of a mis-keyed number.</div>', unsafe_allow_html=True)
+            headers = [("Page", ""), ("Route", ""), ("Station", ""), ("Stated", "r"),
+                       ("Off by", "r")]
+            body = [[td(f"p{v.page}"), td(v.route_label), td(f"{v.station:,}", "code"),
+                     td(f"{v.span_ft:,.0f} ft", "r num"),
+                     f'<td class="r num" style="color:var(--critical)">'
+                     f'{v.off_by:+,.0f} ft</td>'] for v in rep.miskeyed]
+            st.markdown(table_html(headers, body), unsafe_allow_html=True)
+
+        if rep.unverified:
+            st.markdown('<div class="card__t" style="margin-top:14px">Footages the '
+                        "drawing can't account for</div>", unsafe_allow_html=True)
             headers = [("Page", ""), ("Route", ""), ("Station", ""), ("Stated", "r")]
             body = [[td(f"p{v.page}"), td(v.route_label), td(f"{v.station:,}", "code"),
                      f'<td class="r num" style="color:var(--critical)">'
-                     f'{v.span_ft:,.0f} ft</td>'] for v in todo]
+                     f'{v.span_ft:,.0f} ft</td>'] for v in rep.unverified]
             st.markdown(table_html(headers, body), unsafe_allow_html=True)
-            st.markdown('<div class="hint">These footages match no distance between '
-                        'any two sequentials on their route, so they are the most '
-                        'likely to be mis-stated.</div>', unsafe_allow_html=True)
+            st.markdown('<div class="hint">These match no distance between any two '
+                        'sequentials on their route.</div>', unsafe_allow_html=True)
 
         if rep.conduit:
             bad = rep.conduit_failures
@@ -277,10 +291,10 @@ def _ingest_pdf_annotations(state: WizardState, path, name: str) -> None:
     if state.contract and unmatched:
         warnings.append(f"{unmatched} of {len(lines)} line(s) didn't match the bid "
                         "schedule — resolve them in the Crosswalk step.")
-    if stationing.unverified:
+    if stationing.to_review:
         warnings.append(
-            f"{len(stationing.unverified)} span footage(s) match no distance on "
-            "their route — see the footage check below.")
+            f"{len(stationing.to_review)} span footage(s) need checking against "
+            "the drawing — see the footage check below.")
     if res.excluded:
         warnings.append(f"{len(res.excluded)} span(s) marked “DID NOT BUILD” were "
                         "excluded.")
@@ -301,7 +315,7 @@ def _log_asbuilt_load(state: WizardState, source: str, stationing=None) -> None:
               "warnings": len(state.asbuilt_warnings)}
     if stationing is not None and stationing.checked:
         detail["stationing_checked"] = stationing.checked
-        detail["stationing_unverified"] = len(stationing.unverified)
+        detail["stationing_to_review"] = len(stationing.to_review)
     log_action("load_asbuilt", "asbuilt", actor=state.reviewer or None,
                detail=detail)
 

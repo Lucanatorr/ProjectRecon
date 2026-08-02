@@ -29,6 +29,13 @@ from dataclasses import dataclass, field
 # way an aerial route's can — see the note in check_conduit.
 _MAX_BURIED_PAGE_JUMP = 3
 
+# How far a footage can be off its run and still read as a mis-keyed number rather
+# than a break. Measured across the four as-builts, failures cluster at either end:
+# 16 are within a tenth of their run (+1, +2, -10, +4 ft — plainly typed wrong) and
+# 106 are more than a quarter off, which is a route that left the sheet. The cut
+# sits in the empty ground between them.
+_MISKEY_FRACTION = 0.10
+
 
 def _longest_claim(items, claim) -> float:
     """The largest single run anyone wrote on this route."""
@@ -76,6 +83,10 @@ class SpanCheck:
 
 #: A span's footage closes its chain gap exactly — verified against the drawing.
 VERIFIED = "verified"
+#: The run is the right size but the footage is slightly wrong — the signature of a
+#: mis-keyed number rather than a break in the chain. The strongest evidence of a
+#: real error the drawing can give, so these come first.
+MISKEYED = "miskeyed"
 #: It doesn't close the chain gap, but it does equal a real distance between two
 #: sequentials on its route — usually a break in the chain (a span drawn on another
 #: sheet), not a bad footage.
@@ -93,6 +104,7 @@ class SpanVerdict:
     station: int
     span_ft: float
     verdict: str
+    off_by: float = 0.0           # how far off the run, when the verdict is MISKEYED
 
     @property
     def route_label(self) -> str:
@@ -116,9 +128,20 @@ class StationingReport:
         return [v for v in self.verdicts if v.verdict == verdict]
 
     @property
+    def miskeyed(self) -> list:
+        """Footages the drawing contradicts by a small margin — the strongest
+        evidence of a real error, so a supervisor starts here."""
+        return self.by_verdict(MISKEYED)
+
+    @property
     def unverified(self) -> list:
-        """The spans worth a supervisor's attention first."""
+        """Spans the drawing can't account for at all."""
         return self.by_verdict(UNVERIFIED)
+
+    @property
+    def to_review(self) -> list:
+        """Everything a supervisor should look at, worst evidence first."""
+        return self.miskeyed + self.unverified
 
     @property
     def checked(self) -> int:
@@ -140,11 +163,17 @@ class StationingReport:
         if not self.verdicts:
             return "No span stationing available to cross-check."
         n_v = len(self.by_verdict(VERIFIED))
-        n_u = len(self.unverified)
+        n_m, n_u = len(self.miskeyed), len(self.unverified)
         head = (f"{n_v} of {len(self.verdicts)} span footages verified against the "
                 f"drawing's sequentials")
-        return head + (f" — {n_u} match no distance on their route and need a look."
-                       if n_u else ", and none are unaccounted for.")
+        if not (n_m or n_u):
+            return head + ", and none are unaccounted for."
+        bits = []
+        if n_m:
+            bits.append(f"{n_m} disagree with the run they sit on")
+        if n_u:
+            bits.append(f"{n_u} match no distance on their route")
+        return head + " — " + " and ".join(bits) + "." 
 
 
 # How a route writes its spans. Contractors are consistent within a route but not
@@ -331,6 +360,7 @@ def check_stationing(span_records: list, coil_marks: list | None = None,
         stations.setdefault(remap.get(c.route, c.route), set()).add(c.station)
 
     verified: set = set()
+    near: dict = {}
 
     for route, spans in routes.items():
         # de-dupe identical records (the same span drawn on two sheets) and order
@@ -372,8 +402,12 @@ def check_stationing(span_records: list, coil_marks: list | None = None,
                 route=route, page=owner.page, station_from=a.station,
                 station_to=b.station, gap=gap, stated=stated, ok=ok,
                 delta=stated - gap, raw=owner.raw))
+            key = (route, owner.station, owner.span_ft)
             if ok:
-                verified.add((route, owner.station, owner.span_ft))
+                verified.add(key)
+            elif gap and abs(stated - gap) <= gap * _MISKEY_FRACTION:
+                # the run is the right size — the number on it isn't
+                near[key] = min(near.get(key, 1e9), stated - gap, key=abs)
 
     # every span gets a verdict, including those with no neighbour to chain to
     for s in span_records:
@@ -381,11 +415,13 @@ def check_stationing(span_records: list, coil_marks: list | None = None,
         key = (route, s.station, s.span_ft)
         if key in verified:
             verdict = VERIFIED
+        elif key in near:
+            verdict = MISKEYED
         else:
             known = sorted(stations.get(route, ()))
             reachable = {abs(x - y) for y in (s.station, s.end) for x in known}
             verdict = PLAUSIBLE if s.span_ft in reachable else UNVERIFIED
         report.verdicts.append(SpanVerdict(
             page=s.page, route=route, station=s.station, span_ft=s.span_ft,
-            verdict=verdict))
+            verdict=verdict, off_by=near.get(key, 0.0)))
     return report
