@@ -198,6 +198,9 @@ _ALIASES = (
     (r"\bAFO[\s./\-]*EYE\b", "AFO.EYE"),
     (r"\bAFO[\s./\-]*S\b", "AFO.S"),
     (r"\bAFO[\s./\-]*SL\b", "AFO.SL"),
+    # a bond written on its own is still the aerial bond; the lookbehind keeps this
+    # off the AFO-prefixed forms the rules above have already folded
+    (r"(?<!AFO\.)(?<!AFO )\bBOND\b", "AFO.BOND"),
 )
 
 
@@ -294,7 +297,13 @@ _FT = re.compile(r"(\d[\d,]*)\s*'")
 _TRAIL = re.compile(r"[-=]\s*(\d[\d,]*)\s*'?\s*$")
 _BARE = re.compile(r"^(\d[\d,]*)\s*(MID|TOP|TAIL|UG|BOTTOM)?$", re.I)
 _BHF = re.compile(r"^BHF[\s./\-]*(\d+)\s*(T)?", re.I)
-_BDO = re.compile(r"^BDO\s*\(?\s*([SML])\s*\)?", re.I)
+# the drop vault is lettered rather than sized, and may carry its count in a second
+# bracket: BHF-PH · BHF(PH) · BHF(PH)(1)
+_BHF_PH = re.compile(
+    r"^BHF[\s./\-]*\(?\s*PH\s*\)?(?:\s*\(\s*(\d+)\s*\))?\s*$", re.I)
+# Pedestal size, written BDO(M) · BDO - M · BD0M (a typed zero). Anchored at the
+# end so the lettered cabinet codes — BDO-SC288 and friends — are left alone.
+_BDO = re.compile(r"^BD[O0][\s\-]*\(?\s*([SML])\s*\)?\s*$", re.I)
 _HST = re.compile(r"HST\s*(\d+)\s*-\s*(\d+)", re.I)
 _DIMS = re.compile(r"(\d+)\s*[xX]\s*(\d+)(?:\s*[xX]\s*\d+)?")
 _BM60 = re.compile(r"BM60", re.I)
@@ -551,6 +560,11 @@ def _classify(t: str, raw: str, res: AnnotParse, ctx: _Ctx) -> bool:
         return True
 
     # --- structures ----------------------------------------------------------
+    m = _BHF_PH.match(b)
+    if m:                                            # drop vault, count in brackets
+        res.add(ItemType("handhole_PH", "Drop vault BHF-PH", UoM.EA, "BHF-PH"),
+                int(m.group(1)) if m.group(1) else n)
+        return True
     m = _BHF.match(b)
     if m:
         size, tier = m.group(1), (m.group(2) or "")

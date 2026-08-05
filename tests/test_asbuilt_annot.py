@@ -339,3 +339,34 @@ def test_a_sized_code_keeps_its_size_out_of_the_count():
 def test_a_coils_trailing_number_is_a_count_when_small_and_a_length_when_not():
     assert _parse("AFO.S - 2").qty["coil"] == 2        # two coils
     assert _parse("AFO.S - 76").qty["coil"] == 1       # one 76 ft coil
+
+
+def test_a_bond_written_on_its_own_is_still_the_aerial_bond():
+    r = _parse("BOND", "AFO BOND", "1-AFO.BOND", "AFO/BOND - 1")
+    assert r.qty["bond"] == 4                 # every spelling folds to the one unit
+
+
+def test_a_pedestal_size_is_read_however_it_is_written():
+    # BD0M types a zero for the letter; BDO - M spaces the size out
+    for token in ("BDO(M)", "BD0M", "BDO - M", "BDO M"):
+        assert _parse(token).qty["pedestal_M"] == 1, token
+    assert _parse("BDO - L").qty["pedestal_L"] == 1
+
+
+def test_a_lettered_cabinet_code_is_not_read_as_a_pedestal_size():
+    # BDO-SC288 is a 288 cabinet vault, not a small pedestal
+    r = _parse("BDO-SC288")
+    assert "pedestal_S" not in r.qty and r.unresolved
+
+
+def test_the_drop_vault_is_lettered_and_may_carry_its_count():
+    assert _parse("BHF(PH)").qty["handhole_PH"] == 1
+    assert _parse("BHF(PH)(1)").qty["handhole_PH"] == 1
+    assert _parse("BHF-PH").qty["handhole_PH"] == 1
+    assert _parse("3-BHF(PH)").qty["handhole_PH"] == 3
+    assert _parse("BHF(PH)").code["handhole_PH"] == "BHF-PH"
+
+
+def test_a_sized_vault_still_reads_as_its_size():
+    r = _parse("BHF-48T | BHF-10")
+    assert r.qty["handhole_48T"] == 1 and r.qty["handhole_10"] == 1
