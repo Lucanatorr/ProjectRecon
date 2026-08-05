@@ -296,3 +296,46 @@ def test_no_contract_leaves_everything_for_the_crosswalk():
     r = _parse("AFO 288F | 6288 | 410' | AFO SL")
     lines, resolved = to_asbuilt_lines(r)
     assert lines[0].code is None and resolved == {}
+
+
+# --- the notation a fifth book brought in (PON 8) --------------------------- #
+def test_a_number_on_the_cable_label_is_the_sequential_not_footage():
+    # "AFO 48 - 74464" starts at station 74464; the cable placed is on its own
+    # token. Reading the label's number as footage counts the sequential itself.
+    r = _parse("AFO 48 - 74464 | AFO/OLASH - 274")
+    assert r.qty["olash"] == 274
+    assert not any(k.startswith("afo_sl") for k in r.qty)
+
+
+def test_a_label_with_a_foot_mark_is_still_footage():
+    # the one book that does put the length on the label marks it as one
+    r = _parse("AFO 144F | 14080 | 312' | BFO 144F 150'")
+    assert r.qty["bfo_144_I"] == 150
+
+
+def test_a_sequential_on_the_label_adds_nothing_when_no_footage_is_written():
+    r = _parse("AFO 48 - 75006 | BM81 - 2")
+    assert r.qty == {"riser_guard": 2}
+
+
+def test_a_slash_separates_a_code_name_like_a_dot_or_a_dash():
+    r = _parse("AFO 48 - 72260 | AFO/SL - 156 | AFO/GAA - 1 | AFO/GG - 1")
+    assert r.qty["afo_sl_48"] == 156
+    assert r.qty["anchor"] == 1 and r.qty["down_guy"] == 1
+
+
+def test_a_counted_code_takes_its_quantity_from_either_end():
+    r = _parse("BM81 - 2 | BM2 - 2 | 3-BM53 | BM55A=1")
+    assert r.qty["riser_guard"] == 2 and r.qty["ground_rod"] == 2
+    assert r.qty["marker_post"] == 3 and r.qty["locate_disk"] == 1
+
+
+def test_a_sized_code_keeps_its_size_out_of_the_count():
+    # BHF-10 is a ten-inch vault, not ten vaults
+    r = _parse("BHF-10 | BHF-48T")
+    assert r.qty["handhole_10"] == 1 and r.qty["handhole_48T"] == 1
+
+
+def test_a_coils_trailing_number_is_a_count_when_small_and_a_length_when_not():
+    assert _parse("AFO.S - 2").qty["coil"] == 2        # two coils
+    assert _parse("AFO.S - 76").qty["coil"] == 1       # one 76 ft coil

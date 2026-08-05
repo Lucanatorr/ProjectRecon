@@ -187,17 +187,17 @@ def extract_annotations(pdf_path) -> list[Annotation]:
 #  normalization
 # --------------------------------------------------------------------------- #
 _ALIASES = (
-    (r"\bAFO[\s.\-]*6AA\b", "AFO.GAA"), (r"\bAFO[\s.\-]*GAA\b", "AFO.GAA"),
-    (r"\bAFO[\s.\-]*66\b", "AFO.GG"), (r"\bAFO[\s.\-]*GG\b", "AFO.GG"),
-    (r"\bAFO[\s.\-]*BOND\b", "AFO.BOND"),
-    (r"\bAFO[\s.\-]*BANDING\b", "AFO.BANDING"),
-    (r"\bAFO[\s.\-]*TRANS?2\b", "AFO.TRAN2"),
-    (r"\bAFO[\s.\-]*TRANS?1\b", "AFO.TRAN1"),
-    (r"\bAFO[\s.\-]*OLASH\b", "AFO.OLASH"), (r"\bAFO[\s.\-]*DELASH\b", "AFO.RELASH"),
-    (r"\bAFO[\s.\-]*RELASH\b", "AFO.RELASH"),
-    (r"\bAFO[\s.\-]*EYE\b", "AFO.EYE"),
-    (r"\bAFO[\s.\-]*S\b", "AFO.S"),
-    (r"\bAFO[\s.\-]*SL\b", "AFO.SL"),
+    (r"\bAFO[\s./\-]*6AA\b", "AFO.GAA"), (r"\bAFO[\s./\-]*GAA\b", "AFO.GAA"),
+    (r"\bAFO[\s./\-]*66\b", "AFO.GG"), (r"\bAFO[\s./\-]*GG\b", "AFO.GG"),
+    (r"\bAFO[\s./\-]*BOND\b", "AFO.BOND"),
+    (r"\bAFO[\s./\-]*BANDING\b", "AFO.BANDING"),
+    (r"\bAFO[\s./\-]*TRANS?2\b", "AFO.TRAN2"),
+    (r"\bAFO[\s./\-]*TRANS?1\b", "AFO.TRAN1"),
+    (r"\bAFO[\s./\-]*OLASH\b", "AFO.OLASH"), (r"\bAFO[\s./\-]*DELASH\b", "AFO.RELASH"),
+    (r"\bAFO[\s./\-]*RELASH\b", "AFO.RELASH"),
+    (r"\bAFO[\s./\-]*EYE\b", "AFO.EYE"),
+    (r"\bAFO[\s./\-]*S\b", "AFO.S"),
+    (r"\bAFO[\s./\-]*SL\b", "AFO.SL"),
 )
 
 
@@ -224,6 +224,13 @@ def _num(text: str) -> float | None:
 # Codes whose trailing number is a SIZE, not a quantity (BHF-10, BHF-48T, BM60…).
 _SIZED = re.compile(r"^\(?\s*\d*\s*[-)]?\s*(BHF|BM60|BDO|BM81|BM90|BM55|BM53|BM2)",
                     re.I)
+# Of those, the ones that are only ever counted: a trailing number on them is a
+# quantity, not a size or a length. BHF-10 is a ten-inch vault and BM90 - 192' is a
+# length, so they stay out of it.
+_COUNTED = re.compile(r"^(BM81|BM2|BM53|BM55A?)\b", re.I)
+# A coil's trailing number is its length once it gets past a plausible count —
+# "AFO.S - 2" is two coils, "AFO.S - 76" is one coil of 76 feet.
+_COIL_COUNT_CEIL = 10
 
 
 def _qty_prefix(token: str) -> tuple[int, str]:
@@ -242,7 +249,8 @@ def _qty_prefix(token: str) -> tuple[int, str]:
     if m:
         return int(m.group(2)), m.group(1).strip()
     m = re.match(r"^(.*?)\s*-\s*(\d+)$", t)
-    if m and not re.search(r"\d\s*'", t) and not _SIZED.match(t):
+    if m and not re.search(r"\d\s*'", t) and (
+            not _SIZED.match(t) or _COUNTED.match(t)):
         return int(m.group(2)), m.group(1).strip()
     return 1, t
 
@@ -285,7 +293,7 @@ _NOT_A_HEADER = re.compile(r"\b(COIL|SNOW\s*SHOE|UP\s*POLE|DOWN\s*POLE)\b", re.I
 _FT = re.compile(r"(\d[\d,]*)\s*'")
 _TRAIL = re.compile(r"[-=]\s*(\d[\d,]*)\s*'?\s*$")
 _BARE = re.compile(r"^(\d[\d,]*)\s*(MID|TOP|TAIL|UG|BOTTOM)?$", re.I)
-_BHF = re.compile(r"^BHF[\s.\-]*(\d+)\s*(T)?", re.I)
+_BHF = re.compile(r"^BHF[\s./\-]*(\d+)\s*(T)?", re.I)
 _BDO = re.compile(r"^BDO\s*\(?\s*([SML])\s*\)?", re.I)
 _HST = re.compile(r"HST\s*(\d+)\s*-\s*(\d+)", re.I)
 _DIMS = re.compile(r"(\d+)\s*[xX]\s*(\d+)(?:\s*[xX]\s*\d+)?")
@@ -383,7 +391,12 @@ def _parse_comment(toks: list[str], page: int, res: AnnotParse) -> None:
             ctx.seg_kind = mc.group(1).upper()
             ctx.seg_count = int(mc.group(2))
             ctx.seg_ie = bool(re.search(r"\.\s*IE\b|\bIE\b", t))
-            ft = _FT.search(t) or _TRAIL.search(t)
+            # A number on the label itself is the sequential the cable starts at,
+            # not cable placed — "AFO 48 - 74464" is station 74464, and the footage
+            # is written on its own token. Only a foot mark makes it a length, which
+            # is how the one book that does put footage here writes it
+            # ("BFO 144F 150'").
+            ft = _FT.search(t)
             if ft:                                   # cable label carrying footage
                 val = float(ft.group(1).replace(",", ""))
                 if ctx.seg_kind == "A":
@@ -455,7 +468,7 @@ def _classify(t: str, raw: str, res: AnnotParse, ctx: _Ctx) -> bool:
         if "UP POLE" in b or "DOWN POLE" in b:      # riser footage — part of span
             return True
         if "AFO.S" == b or b.startswith("AFO.S "):
-            res.add(ITEM_TYPES["coil"], n)
+            res.add(ITEM_TYPES["coil"], n if n <= _COIL_COUNT_CEIL else 1)
             return True
         if "RTD" in b:
             res.add(ITEM_TYPES["afo_rtd"], ft or 0)
