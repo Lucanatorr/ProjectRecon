@@ -102,6 +102,38 @@ parses them **directly with no OCR** — no Tesseract, no scanning:
 - Everything lands as `confidence="annot"` in the editable grid — confirmed by a human
   before it counts.
 
+## Field takeoff (second app)
+
+A separate app inside Project Recon for reading field documents straight into
+quantities. Switch between it and Reconciliation with the toggle at the top of
+either sidebar — both apps run on the same server and share the session id
+(`?sid=`), so each keeps its work while you move between them.
+
+**Drawings** — upload marked-up construction PDFs (or zips of them; each zip is
+one drawing set). The Adobe comment boxes are read directly from the PDF, no OCR:
+
+- every box headed **MATERIALS** is totalled by material (`2-DEADEND`,
+  `3-12" BOLTS`, `3'-COPPER`, `2 ROLLS LASHING WIRE` …); spelling variants are
+  combined and listed, and a name that isn't recognised is kept as written
+- every **sequential calculation** (`48CT` / `12400-11950=450'`, `96DF`,
+  `48AF OVERLASH`, `96CT` in meters …) is totalled by fiber count; boxes that name
+  only a cable ID are totalled by cable; box-total lines are checked, not added
+- a resubmitted drawing whose comments repeat another file's is counted once
+- anything odd (a subtraction that doesn't match, a missing label, an outlier
+  quantity) is listed under **Needs a look**; the box's own figure is used
+
+**Invoices** — upload contractor invoice PDFs, one invoice per page (the
+*Job Description / Rate / Total* layout). Every line item is read with its
+quantity, unit, rate and total, then checked: quantity × rate against the billed
+amount, the lines against the printed total, each rate against the rate usually
+billed for the same work. A page that repeats an invoice already loaded is counted
+once. **Send to Reconciliation** makes those lines this session's cycle invoices
+(billing mode *discrete*, since each invoice bills its own period); the reviewer
+still confirms them on the Invoices step.
+
+Both pages download an Excel workbook whose totals are live formulas over the
+line-by-line detail, so every figure traces back to its page.
+
 ## Architecture
 
 A pure-Python domain core (`recon/`) with **no Streamlit imports** — reusable
@@ -123,13 +155,19 @@ recon/                  domain core (pure Python, no Streamlit)
     asbuilt_annot.py        PDF comment (FreeText) as-built → quantities by code
     invoices.py             xlsx/csv/pdf/zip dispatch + dedupe
     invoice_pdf.py          PDF invoices + per-contractor templates
+takeoff/                Field-takeoff core (pure Python, no Streamlit)
+  sources.py              uploads → PDFs (zips read in memory, grouped by zip)
+  drawings.py             comment boxes → materials + fiber footage by count
+  invoices.py             invoice PDFs → line items, checks, Recon hand-off
+  export.py               Excel workbooks (formula totals over the detail)
+takeoff_ui/             Field-takeoff presentation (?app=takeoff)
 ui/                     Streamlit presentation layer
   state.py                wizard state, resolutions, fingerprint
   gates.py                pre-export validation gates
   theme.py                mockup CSS + HTML builders
   db.py  progress.py  uploads.py
   step_*.py               one module per wizard step
-app.py                  entry point + step router
+app.py                  entry point: Reconciliation steps + Field takeoff
 config.py               tolerances, matching, retainage, paths
 tools/backup.py         database backup / restore
 samples/                demo + fixture generator

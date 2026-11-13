@@ -2,6 +2,10 @@
 
 Streamlit entry point + step router. Run:  streamlit run app.py
 
+Two linked apps run from here on one server and one session id (``?sid=``):
+Reconciliation (the wizard below) and Field takeoff (``?app=takeoff``, in
+``takeoff_ui``) — switching between them keeps each app's work in place.
+
 The presentation layer only orchestrates session state and calls the pure-Python
 domain core (recon/*). The chrome (sidebar stepper, top bar) is rendered as custom
 HTML to match reconciliation_mockup.html; navigation is via query-param links.
@@ -10,6 +14,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+import takeoff_ui.app as takeoff_app
 from ui import (
     home,
     step_asbuilt,
@@ -86,6 +91,11 @@ def render_sidebar(state, sid: str) -> None:
 
 
 def main() -> None:
+    # Field takeoff is its own app, linked by the shared session id
+    if st.query_params.get("app") == "takeoff":
+        takeoff_app.render()
+        return
+
     state = get_state()
     sid = get_sid()
     route = st.query_params.get("step", "")

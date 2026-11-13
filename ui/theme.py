@@ -313,6 +313,15 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px;}
 
 .stAlert{border-radius:9px;}
 
+/* ---------- app switcher (Reconciliation ⇄ Field takeoff) ---------- */
+.apps{display:flex;gap:3px;margin:12px 12px 2px;padding:3px;background:#0b111d;border:1px solid var(--ink-line);border-radius:9px;}
+.apps a{flex:1;text-align:center;padding:6px 6px;border-radius:7px;font-size:12px;font-weight:500;color:#c3ccdb;text-decoration:none;transition:background .15s;}
+.apps a:hover{background:var(--ink-2);color:#fff;}
+.apps a.on{background:var(--blue);color:#fff;}
+[data-testid="stMarkdown"] .apps a{text-decoration:none !important;color:#c3ccdb !important;}
+[data-testid="stMarkdown"] .apps a.on{color:#fff !important;}
+[data-testid="stMarkdown"] .hnav a{text-decoration:none !important;}
+
 /* ---------- home / landing ---------- */
 .hnav{display:flex;flex-direction:column;gap:2px;padding:14px 12px 6px;}
 .hnav a{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:9px;font-size:13.5px;font-weight:500;color:#c3ccdb;text-decoration:none;transition:background .15s;}
@@ -400,6 +409,25 @@ def _money_signed(v: float) -> str:
 
 
 # --------------------------------------------------------------------------- #
+#  app switcher — the two apps share one session id, so switching keeps both
+#  apps' work in place
+# --------------------------------------------------------------------------- #
+APPS = (("recon", "Reconciliation"), ("takeoff", "Field takeoff"))
+
+
+def app_switch_html(active: str, sid: str = "", recon_step: str = "home") -> str:
+    """The Reconciliation ⇄ Field takeoff toggle shown at the top of both apps'
+    sidebars. ``recon_step`` is where the Reconciliation link lands (the step that
+    session was last on); Field takeoff remembers its own last view."""
+    q = f"&sid={sid}" if sid else ""
+    href = {"recon": f"?step={recon_step}{q}", "takeoff": f"?app=takeoff{q}"}
+    links = "".join(
+        f'<a class="{"on" if key == active else ""}" href="{href[key]}" target="_self">'
+        f'{label}</a>' for key, label in APPS)
+    return f'<nav class="apps" aria-label="Switch app">{links}</nav>'
+
+
+# --------------------------------------------------------------------------- #
 #  sidebar
 # --------------------------------------------------------------------------- #
 def sidebar_html(steps_state: list[dict], project_name: str, meta: str,
@@ -434,6 +462,7 @@ def sidebar_html(steps_state: list[dict], project_name: str, meta: str,
       </a>
       <div class="side__ribbon" title="Fiber color code">{ribbon}</div>
     </div>
+    {app_switch_html("recon", sid, "contract")}
     <nav class="steps">{''.join(step_items)}</nav>
     <div class="side__foot">
       <div class="proj">Active project</div>
@@ -817,6 +846,7 @@ def sidebar_home_html(n_projects: int, n_contractors: int, n_cycles: int,
       </div>
       <div class="side__ribbon" title="Fiber color code">{ribbon}</div>
     </div>
+    {app_switch_html("recon", sid, "home")}
     <nav class="hnav">{projects_nav}{contractors_nav}</nav>{recent_block}
     <div class="side__foot">
       <div class="proj">Portfolio</div>
