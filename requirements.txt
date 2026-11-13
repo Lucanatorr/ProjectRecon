@@ -6,6 +6,7 @@ numpy>=1.26
 openpyxl>=3.1
 rapidfuzz>=3.9
 pdfplumber>=0.11
+pypdfium2>=4.30        # fast page-text pre-check for invoice PDFs (installed with pdfplumber)
 reportlab>=4.0        # PDF fixtures now; PDF approval summary in Phase 4
 pydantic>=2.7
 
